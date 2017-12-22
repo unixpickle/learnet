@@ -3,7 +3,8 @@
 package tunnet
 
 import (
-	"syscall"
+	"os"
+	"sync"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
@@ -22,6 +23,10 @@ const (
 type utunSocket struct {
 	fd   int
 	name string
+
+	refLock  sync.Mutex
+	refCount int
+	closed   bool
 }
 
 func openUtunSocket() (res *utunSocket, err error) {
@@ -40,8 +45,10 @@ func openUtunSocket() (res *utunSocket, err error) {
 	// struct ctl_info
 	ctlInfo := make([]byte, 128)
 	copy(ctlInfo[4:], []byte(utunControl))
-	if ok, err := socket.ioctlWithData(ioctlCTLIOCGINFO, ctlInfo); !ok {
-		return nil, err
+	_, _, sysErr := unix.Syscall(unix.SYS_IOCTL, uintptr(socket.fd), uintptr(ioctlCTLIOCGINFO),
+		uintptr(unsafe.Pointer(&ctlInfo[0])))
+	if sysErr != 0 {
+		return nil, sysErr
 	}
 
 	// struct sockaddr_ctl
@@ -50,7 +57,7 @@ func openUtunSocket() (res *utunSocket, err error) {
 	addrData[1] = unix.AF_SYSTEM
 	addrData[2] = afSysControl
 	copy(addrData[4:], ctlInfo[:4])
-	_, _, sysErr := unix.Syscall(unix.SYS_CONNECT, uintptr(socket.fd),
+	_, _, sysErr = unix.Syscall(unix.SYS_CONNECT, uintptr(socket.fd),
 		uintptr(unsafe.Pointer(&addrData[0])), uintptr(32))
 	if sysErr != 0 {
 		return nil, sysErr
@@ -69,38 +76,56 @@ func openUtunSocket() (res *utunSocket, err error) {
 	return socket, nil
 }
 
-func (u *utunSocket) Read(buffer []byte) (int, error) {
+func (u *utunSocket) ReadPacket() ([]byte, error) {
+	if err := u.retain(); err != nil {
+		return nil, err
+	}
+	defer u.release()
+	packet := make([]byte, 65536)
 	for {
-		amount, err := unix.Read(u.fd, buffer)
+		amount, err := unix.Read(u.fd, packet)
 		if err == nil {
-			return amount, nil
+			return packet[4:amount], nil
 		} else if err == unix.EINTR {
-			// TODO: can amount be > 0?
 			continue
 		} else {
-			return amount, err
+			return nil, err
 		}
 	}
 }
 
-func (u *utunSocket) Write(buffer []byte) (int, error) {
-	return unix.Write(u.fd, buffer)
+func (u *utunSocket) WritePacket(buffer []byte) error {
+	if err := u.retain(); err != nil {
+		return err
+	}
+	defer u.release()
+	_, err := unix.Write(u.fd, append([]byte{0, 0, 0, 2}, buffer...))
+	return err
 }
 
-func (u *utunSocket) Shutdown() error {
+func (u *utunSocket) Close() error {
+	if err := u.retain(); err != nil {
+		return err
+	}
+	defer u.release()
 	return unix.Shutdown(u.fd, unix.SHUT_RDWR)
 }
 
-func (u *utunSocket) ioctlWithData(command int, data []byte) (ok bool, err syscall.Errno) {
-	if data != nil {
-		_, _, err = unix.Syscall(unix.SYS_IOCTL, uintptr(u.fd), uintptr(command),
-			uintptr(unsafe.Pointer(&data[0])))
-	} else {
-		_, _, err = unix.Syscall(unix.SYS_IOCTL, uintptr(u.fd), uintptr(command), uintptr(0))
+func (u *utunSocket) retain() error {
+	u.refLock.Lock()
+	defer u.refLock.Unlock()
+	if u.closed {
+		return os.ErrClosed
 	}
-	if err != 0 {
-		return
-	} else {
-		return true, 0
+	u.refCount += 1
+	return nil
+}
+
+func (u *utunSocket) release() {
+	u.refLock.Lock()
+	defer u.refLock.Unlock()
+	u.refCount -= 1
+	if u.closed && u.refCount == 0 {
+		unix.Close(u.fd)
 	}
 }
