@@ -20,6 +20,11 @@ const (
 	utunControl = "com.apple.net.utun_control"
 )
 
+// MakeTunnel creates a new tunnel interface.
+func MakeTunnel() (Tunnel, error) {
+	return openUtunSocket()
+}
+
 type utunSocket struct {
 	fd   int
 	name string
@@ -74,6 +79,10 @@ func openUtunSocket() (res *utunSocket, err error) {
 	socket.name = string(nameData[:nameLen-1])
 
 	return socket, nil
+}
+
+func (u *utunSocket) Name() string {
+	return u.name
 }
 
 func (u *utunSocket) ReadPacket() ([]byte, error) {
