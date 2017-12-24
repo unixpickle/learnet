@@ -57,30 +57,18 @@ func openUtunSocket() (res *utunSocket, err error) {
 		}
 	}()
 
-	// struct ctl_info
-	ctlInfo := make([]byte, 128)
-	copy(ctlInfo[4:], []byte(utunControl))
-	_, _, sysErr := unix.Syscall(unix.SYS_IOCTL, uintptr(socket.fd), uintptr(ioctlCTLIOCGINFO),
-		uintptr(unsafe.Pointer(&ctlInfo[0])))
-	if sysErr != 0 {
-		return nil, sysErr
+	controlID, err := socket.getControlID()
+	if err != nil {
+		return nil, err
 	}
 
-	// struct sockaddr_ctl
-	addrData := make([]byte, 32)
-	addrData[0] = 32
-	addrData[1] = unix.AF_SYSTEM
-	addrData[2] = afSysControl
-	copy(addrData[4:], ctlInfo[:4])
-	_, _, sysErr = unix.Syscall(unix.SYS_CONNECT, uintptr(socket.fd),
-		uintptr(unsafe.Pointer(&addrData[0])), uintptr(32))
-	if sysErr != 0 {
-		return nil, sysErr
+	if err := socket.connectToControl(controlID); err != nil {
+		return nil, err
 	}
 
 	nameData := make([]byte, 32)
 	nameLen := uintptr(len(nameData))
-	_, _, sysErr = unix.Syscall6(unix.SYS_GETSOCKOPT, uintptr(socket.fd), sysprotoControl,
+	_, _, sysErr := unix.Syscall6(unix.SYS_GETSOCKOPT, uintptr(socket.fd), sysprotoControl,
 		utunOptIfname, uintptr(unsafe.Pointer(&nameData[0])), uintptr(unsafe.Pointer(&nameLen)), 0)
 	if sysErr != 0 {
 		return nil, sysErr
@@ -144,6 +132,33 @@ func (u *utunSocket) Close() error {
 	}
 	defer u.release()
 	return unix.Shutdown(u.fd, unix.SHUT_RDWR)
+}
+
+func (u *utunSocket) getControlID() ([]byte, error) {
+	// struct ctl_info
+	ctlInfo := make([]byte, 128)
+	copy(ctlInfo[4:], []byte(utunControl))
+	_, _, sysErr := unix.Syscall(unix.SYS_IOCTL, uintptr(u.fd), uintptr(ioctlCTLIOCGINFO),
+		uintptr(unsafe.Pointer(&ctlInfo[0])))
+	if sysErr != 0 {
+		return nil, sysErr
+	}
+	return ctlInfo[:4], nil
+}
+
+func (u *utunSocket) connectToControl(controlID []byte) error {
+	// struct sockaddr_ctl
+	addrData := make([]byte, 32)
+	addrData[0] = 32
+	addrData[1] = unix.AF_SYSTEM
+	addrData[2] = afSysControl
+	copy(addrData[4:], controlID)
+	_, _, sysErr := unix.Syscall(unix.SYS_CONNECT, uintptr(u.fd),
+		uintptr(unsafe.Pointer(&addrData[0])), uintptr(32))
+	if sysErr != 0 {
+		return sysErr
+	}
+	return nil
 }
 
 func (u *utunSocket) ifreqIOCTL(ioctl int, reqData []byte) error {
