@@ -9,5 +9,9 @@ type Tunnel interface {
 	Name() string
 	ReadPacket() ([]byte, error)
 	WritePacket([]byte) error
+
+	MTU() (int, error)
+	SetMTU(mtu int) error
+
 	Close() error
 }
