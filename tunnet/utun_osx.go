@@ -7,6 +7,8 @@ import (
 	"sync"
 	"unsafe"
 
+	"github.com/unixpickle/essentials"
+
 	"golang.org/x/sys/unix"
 )
 
@@ -22,7 +24,9 @@ const (
 
 // MakeTunnel creates a new tunnel interface.
 func MakeTunnel() (Tunnel, error) {
-	return openUtunSocket()
+	tun, err := openUtunSocket()
+	err = essentials.AddCtx("make tunnel", err)
+	return tun, err
 }
 
 type utunSocket struct {
