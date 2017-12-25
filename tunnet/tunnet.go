@@ -15,8 +15,8 @@ type Tunnel interface {
 	MTU() (int, error)
 	SetMTU(mtu int) error
 
-	Addresses() (local, dest net.IP, err error)
-	SetAddresses(local, dest net.IP) error
+	Addresses() (local, dest net.IP, mask net.IPMask, err error)
+	SetAddresses(local, dest net.IP, mask net.IPMask) error
 
 	Close() error
 }
