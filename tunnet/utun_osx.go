@@ -89,12 +89,13 @@ func (u *utunSocket) Name() string {
 	return u.name
 }
 
-func (u *utunSocket) ReadPacket() ([]byte, error) {
+func (u *utunSocket) ReadPacket() (packet []byte, err error) {
+	defer essentials.AddCtxTo("read packet", &err)
 	if err := u.retain(); err != nil {
 		return nil, err
 	}
 	defer u.release()
-	packet := make([]byte, 65536)
+	packet = make([]byte, 65536)
 	for {
 		amount, err := unix.Read(u.fd, packet)
 		if err == nil {
@@ -107,16 +108,18 @@ func (u *utunSocket) ReadPacket() ([]byte, error) {
 	}
 }
 
-func (u *utunSocket) WritePacket(buffer []byte) error {
+func (u *utunSocket) WritePacket(buffer []byte) (err error) {
+	defer essentials.AddCtxTo("write packet", &err)
 	if err := u.retain(); err != nil {
 		return err
 	}
 	defer u.release()
-	_, err := unix.Write(u.fd, append([]byte{0, 0, 0, 2}, buffer...))
+	_, err = unix.Write(u.fd, append([]byte{0, 0, 0, 2}, buffer...))
 	return err
 }
 
-func (u *utunSocket) MTU() (int, error) {
+func (u *utunSocket) MTU() (mtu int, err error) {
+	defer essentials.AddCtxTo("get MTU", &err)
 	buf := make([]byte, 4)
 	if err := u.ifreqIOCTL(ioctlSIOCGIFMTU, buf); err != nil {
 		return 0, err
@@ -126,13 +129,16 @@ func (u *utunSocket) MTU() (int, error) {
 	return int(value), nil
 }
 
-func (u *utunSocket) SetMTU(mtu int) error {
+func (u *utunSocket) SetMTU(mtu int) (err error) {
+	defer essentials.AddCtxTo("set MTU", &err)
 	var buf bytes.Buffer
 	binary.Write(&buf, systemByteOrder, uint32(mtu))
 	return u.ifreqIOCTL(ioctlSIOCSIFMTU, buf.Bytes())
 }
 
 func (u *utunSocket) Addresses() (local, dest net.IP, mask net.IPMask, err error) {
+	defer essentials.AddCtxTo("get addresses", &err)
+
 	sockaddrOut := make([]byte, 16)
 	sockaddrOut[0] = 16
 	sockaddrOut[1] = unix.AF_INET
@@ -148,7 +154,9 @@ func (u *utunSocket) Addresses() (local, dest net.IP, mask net.IPMask, err error
 	return ips[0], ips[1], net.IPMask(ips[2]), nil
 }
 
-func (u *utunSocket) SetAddresses(local, dest net.IP, mask net.IPMask) error {
+func (u *utunSocket) SetAddresses(local, dest net.IP, mask net.IPMask) (err error) {
+	defer essentials.AddCtxTo("set addresses", &err)
+
 	u.ifreqIOCTL(ioctlSIOCDIFADDR, make([]byte, 16*3))
 
 	sockaddr := make([]byte, 16*3)
@@ -166,7 +174,8 @@ func (u *utunSocket) SetAddresses(local, dest net.IP, mask net.IPMask) error {
 	return nil
 }
 
-func (u *utunSocket) Close() error {
+func (u *utunSocket) Close() (err error) {
+	defer essentials.AddCtxTo("close", &err)
 	if err := u.retain(); err != nil {
 		return err
 	}
