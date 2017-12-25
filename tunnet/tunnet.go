@@ -2,6 +2,8 @@
 // tunnel network interfaces.
 package tunnet
 
+import "net"
+
 // An IP Tunnel network interface.
 //
 // Supports sending/receiving IP packets.
@@ -12,6 +14,9 @@ type Tunnel interface {
 
 	MTU() (int, error)
 	SetMTU(mtu int) error
+
+	Addresses() (local, dest net.IP, err error)
+	SetAddresses(local, dest net.IP) error
 
 	Close() error
 }

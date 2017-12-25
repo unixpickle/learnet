@@ -5,6 +5,7 @@ package tunnet
 import (
 	"bytes"
 	"encoding/binary"
+	"net"
 	"os"
 	"sync"
 	"unsafe"
@@ -15,13 +16,17 @@ import (
 )
 
 const (
-	pfSystem         = 32
-	sysprotoControl  = 2
-	afSysControl     = 2
-	ioctlCTLIOCGINFO = 0xc0644e03
-	ioctlSIOCGIFMTU  = 0xc0206933
-	ioctlSIOCSIFMTU  = 0x80206934
-	utunOptIfname    = 2
+	pfSystem            = 32
+	sysprotoControl     = 2
+	afSysControl        = 2
+	ioctlCTLIOCGINFO    = 0xc0644e03
+	ioctlSIOCGIFMTU     = 0xc0206933
+	ioctlSIOCSIFMTU     = 0x80206934
+	ioctlSIOCGIFADDR    = 0xc0206921
+	ioctlSIOCGIFDSTADDR = 0xc0206922
+	ioctlSIOCSIFADDR    = 0x8020690c
+	ioctlSIOCSIFDSTADDR = 0x8020690e
+	utunOptIfname       = 2
 
 	utunControl = "com.apple.net.utun_control"
 )
@@ -126,6 +131,37 @@ func (u *utunSocket) SetMTU(mtu int) error {
 	return u.ifreqIOCTL(ioctlSIOCSIFMTU, buf.Bytes())
 }
 
+func (u *utunSocket) Addresses() (local, dest net.IP, err error) {
+	sockaddrOut := make([]byte, 16)
+	sockaddrOut[0] = 16
+	sockaddrOut[1] = unix.AF_INET
+
+	ips := []net.IP{}
+	ioctls := []int{ioctlSIOCGIFADDR, ioctlSIOCGIFDSTADDR}
+	for _, ioctl := range ioctls {
+		if err := u.ifreqIOCTL(ioctl, sockaddrOut); err != nil {
+			return nil, nil, err
+		}
+		ips = append(ips, net.IP(append([]byte{}, sockaddrOut[4:8]...)))
+	}
+	return ips[0], ips[1], nil
+}
+
+func (u *utunSocket) SetAddresses(local, dest net.IP) error {
+	sockaddr := make([]byte, 16)
+	sockaddr[0] = 16
+	sockaddr[1] = unix.AF_INET
+	ioctls := []int{ioctlSIOCSIFADDR, ioctlSIOCSIFDSTADDR}
+	ips := []net.IP{local, dest}
+	for i, ioctl := range ioctls {
+		copy(sockaddr[4:], ips[i][len(ips[i])-4:])
+		if err := u.ifreqIOCTL(ioctl, sockaddr); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (u *utunSocket) Close() error {
 	if err := u.retain(); err != nil {
 		return err
@@ -162,16 +198,22 @@ func (u *utunSocket) connectToControl(controlID []byte) error {
 }
 
 func (u *utunSocket) ifreqIOCTL(ioctl int, reqData []byte) error {
+	sock, err := unix.Socket(unix.AF_INET, unix.SOCK_STREAM, 0)
+	if err != nil {
+		return err
+	}
+	defer unix.Close(sock)
+
 	ifreq := make([]byte, 32)
 	copy(ifreq[:16], []byte(u.Name()))
 	copy(ifreq[16:], reqData)
-	_, _, err := unix.Syscall(unix.SYS_IOCTL, uintptr(u.fd), uintptr(ioctl),
+	_, _, sysErr := unix.Syscall(unix.SYS_IOCTL, uintptr(sock), uintptr(ioctl),
 		uintptr(unsafe.Pointer(&ifreq[0])))
 	copy(reqData, ifreq[16:])
-	if err == 0 {
+	if sysErr == 0 {
 		return nil
 	}
-	return err
+	return sysErr
 }
 
 func (u *utunSocket) retain() error {
