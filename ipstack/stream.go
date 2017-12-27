@@ -68,7 +68,7 @@ func Multiplex(stream Stream, bufferSize int) MultiStream {
 	res := &multiplexer{
 		stream:     stream,
 		bufferSize: bufferSize,
-		writeChan:  make(chan []byte),
+		writeChan:  writeChan,
 		closeChan:  make(chan struct{}),
 		addChan:    make(chan struct{}, 1),
 	}
@@ -79,9 +79,10 @@ func Multiplex(stream Stream, bufferSize int) MultiStream {
 
 func (m *multiplexer) Fork() (Stream, error) {
 	child := &childStream{
-		incoming: make(chan []byte, m.bufferSize),
-		outgoing: make(chan []byte, m.bufferSize),
-		done:     make(chan struct{}),
+		rawIncoming: make(chan []byte, m.bufferSize),
+		incoming:    make(chan []byte),
+		outgoing:    make(chan []byte, m.bufferSize),
+		done:        make(chan struct{}),
 	}
 
 	m.lock.Lock()
