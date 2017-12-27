@@ -226,7 +226,7 @@ func (c *childStream) incomingLoop() {
 				return
 			}
 		case <-c.done:
-			close(c.incoming)
+			return
 		}
 	}
 }
