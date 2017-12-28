@@ -2,6 +2,7 @@ package ipstack
 
 import (
 	"bytes"
+	"sync"
 	"testing"
 	"time"
 )
@@ -80,16 +81,207 @@ func TestMultiplexerPreFork(t *testing.T) {
 	}
 }
 
-// TODO: test closing parent MultiStream.
+func TestMultiplexerClose(t *testing.T) {
+	stream := newTestingStream(10)
+	multi := Multiplex(stream, 10)
+	defer multi.Close()
 
-// TODO: test closing parent MultiStream while a write is
-// blocked by backpressure.
+	stream1, err := multi.Fork()
+	if err != nil {
+		t.Error(err)
+	}
 
-// TODO: test closing child stream that is blocking the
-// parent.
+	stream2, err := multi.Fork()
+	if err != nil {
+		t.Error(err)
+	}
 
-// TODO: test backpressure preventing writes to both
-// parent and children.
+	multi.Close()
+
+	<-stream1.Incoming()
+	<-stream1.Done()
+
+	<-stream2.Done()
+	<-stream2.Incoming()
+}
+
+func TestMultiplexerParentClose(t *testing.T) {
+	stream := newTestingStream(10)
+	multi := Multiplex(stream, 10)
+	defer multi.Close()
+
+	stream1, err := multi.Fork()
+	if err != nil {
+		t.Error(err)
+	}
+
+	stream2, err := multi.Fork()
+	if err != nil {
+		t.Error(err)
+	}
+
+	close(stream.incoming)
+	close(stream.done)
+
+	<-stream1.Incoming()
+	<-stream1.Done()
+
+	<-stream2.Done()
+	<-stream2.Incoming()
+}
+
+func TestMultiplexerCloseBackpressure(t *testing.T) {
+	stream := newTestingStream(10)
+	multi := Multiplex(stream, 10)
+	defer multi.Close()
+
+	child, err := multi.Fork()
+	if err != nil {
+		t.Error(err)
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		for {
+			select {
+			case stream.incoming <- []byte("hi1"):
+			case <-child.Done():
+				wg.Done()
+				return
+			}
+		}
+	}()
+
+	// Make sure messages are flooding in.
+	for i := 0; i < 100; i++ {
+		<-child.Incoming()
+	}
+
+	time.Sleep(time.Second / 5)
+	multi.Close()
+
+	for _ = range child.Incoming() {
+	}
+	<-child.Done()
+
+	wg.Wait()
+}
+
+func TestMultiplexerCloseChildBackpressure(t *testing.T) {
+	stream := newTestingStream(10)
+	multi := Multiplex(stream, 10)
+	defer multi.Close()
+
+	child, err := multi.Fork()
+	if err != nil {
+		t.Error(err)
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		for {
+			select {
+			case stream.incoming <- []byte("hi1"):
+			case <-child.Done():
+				wg.Done()
+				return
+			}
+		}
+	}()
+
+	time.Sleep(time.Second / 5)
+	close(child.Outgoing())
+
+	child, err = multi.Fork()
+	if err != nil {
+		t.Error(err)
+	}
+
+	wg.Add(1)
+	go func() {
+		for {
+			select {
+			case stream.incoming <- []byte("hi2"):
+			case <-child.Done():
+				wg.Done()
+				return
+			}
+		}
+	}()
+
+	for packet := range child.Incoming() {
+		if bytes.Equal(packet, []byte("hi2")) {
+			break
+		}
+	}
+	close(child.Outgoing())
+
+	wg.Wait()
+}
+
+func TestMultiplexerReadBackpressure(t *testing.T) {
+	stream := newTestingStream(10)
+	multi := Multiplex(stream, 10)
+	defer multi.Close()
+
+	child, err := multi.Fork()
+	if err != nil {
+		t.Error(err)
+	}
+
+	for i := 0; i < 22; i++ {
+		stream.incoming <- []byte("foo")
+	}
+
+	time.Sleep(time.Second / 5)
+	select {
+	case stream.incoming <- []byte("bar"):
+		t.Error("expected backpressure")
+	default:
+	}
+
+	<-child.Incoming()
+
+	time.Sleep(time.Second / 5)
+	select {
+	case stream.incoming <- []byte("bar"):
+	default:
+		t.Error("expected no backpressure")
+	}
+}
+
+func TestMultiplexerWriteBackpressure(t *testing.T) {
+	stream := newTestingStream(10)
+	multi := Multiplex(stream, 10)
+	defer multi.Close()
+
+	child, err := multi.Fork()
+	if err != nil {
+		t.Error(err)
+	}
+
+	for i := 0; i < 22; i++ {
+		child.Outgoing() <- []byte("foo")
+	}
+
+	time.Sleep(time.Second / 5)
+	select {
+	case child.Outgoing() <- []byte("bar"):
+		t.Error("expected backpressure")
+	default:
+	}
+
+	<-stream.outgoing
+
+	time.Sleep(time.Second / 5)
+	select {
+	case child.Outgoing() <- []byte("bar"):
+	default:
+		t.Error("expected no backpressure")
+	}
+}
 
 type testingStream struct {
 	incoming chan []byte

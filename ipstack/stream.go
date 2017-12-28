@@ -66,7 +66,7 @@ type multiplexer struct {
 // The bufferSize is the number of packets can be stored
 // in a read/write queue before backpressure takes place.
 func Multiplex(stream Stream, bufferSize int) MultiStream {
-	writeChan := make(chan []byte, bufferSize)
+	writeChan := make(chan []byte)
 	res := &multiplexer{
 		stream:     stream,
 		bufferSize: bufferSize,
