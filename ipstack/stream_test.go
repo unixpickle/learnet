@@ -3,6 +3,7 @@ package ipstack
 import (
 	"bytes"
 	"testing"
+	"time"
 )
 
 func TestMultiplexerBasic(t *testing.T) {
@@ -41,8 +42,43 @@ func TestMultiplexerBasic(t *testing.T) {
 	}
 }
 
-// TODO: test reading packets from multistream before
-// any forks have been made.
+func TestMultiplexerPreFork(t *testing.T) {
+	stream := newTestingStream(10)
+	multi := Multiplex(stream, 10)
+	defer multi.Close()
+
+	stream.incoming <- []byte("hi")
+	stream.incoming <- []byte("ih")
+
+	time.Sleep(time.Second / 5)
+
+	stream1, err := multi.Fork()
+	if err != nil {
+		t.Error(err)
+	}
+	for _, data := range [][]byte{[]byte("hi"), []byte("ih")} {
+		if !bytes.Equal(<-stream1.Incoming(), data) {
+			t.Error("unexpected packet")
+		}
+	}
+
+	close(stream1.Outgoing())
+
+	time.Sleep(time.Second / 5)
+	stream.incoming <- []byte("foo")
+	stream.incoming <- []byte("bar")
+	time.Sleep(time.Second / 5)
+
+	stream1, err = multi.Fork()
+	if err != nil {
+		t.Error(err)
+	}
+	for _, data := range [][]byte{[]byte("foo"), []byte("bar")} {
+		if !bytes.Equal(<-stream1.Incoming(), data) {
+			t.Error("unexpected packet")
+		}
+	}
+}
 
 // TODO: test closing parent MultiStream.
 
@@ -51,6 +87,9 @@ func TestMultiplexerBasic(t *testing.T) {
 
 // TODO: test closing child stream that is blocking the
 // parent.
+
+// TODO: test backpressure preventing writes to both
+// parent and children.
 
 type testingStream struct {
 	incoming chan []byte
