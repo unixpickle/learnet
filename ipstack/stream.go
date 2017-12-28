@@ -3,6 +3,8 @@ package ipstack
 import (
 	"errors"
 	"sync"
+
+	"github.com/unixpickle/essentials"
 )
 
 // A Stream is a bidirectional stream of packets.
@@ -94,6 +96,10 @@ func (m *multiplexer) Fork() (Stream, error) {
 
 	go child.outgoingLoop(m.closeChan, m.writeChan)
 	go child.incomingLoop()
+	go func() {
+		<-child.done
+		m.removeChild(child)
+	}()
 
 	select {
 	case m.addChan <- struct{}{}:
@@ -174,6 +180,18 @@ func (m *multiplexer) closed() bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func (m *multiplexer) removeChild(child *childStream) {
+	m.lock.Lock()
+	defer m.lock.Unlock()
+
+	for i, ch := range m.children {
+		if ch == child {
+			essentials.UnorderedDelete(&m.children, i)
+			break
+		}
 	}
 }
 
