@@ -259,3 +259,39 @@ func (c *childStream) incomingLoop() {
 		}
 	}
 }
+
+type unblocker struct {
+	stream   Stream
+	incoming <-chan []byte
+}
+
+// Unblock wraps the Stream with a read buffer so that
+// reads don't block.
+//
+// After wrapping the stream, the wrapped stream should
+// not be accessed directly anymore.
+func Unblock(stream Stream, buffer int) Stream {
+	incoming := make(chan []byte, buffer)
+	go func() {
+		defer close(incoming)
+		for packet := range stream.Incoming() {
+			select {
+			case incoming <- packet:
+			default:
+			}
+		}
+	}()
+	return &unblocker{stream: stream, incoming: incoming}
+}
+
+func (u *unblocker) Incoming() <-chan []byte {
+	return u.incoming
+}
+
+func (u *unblocker) Outgoing() chan<- []byte {
+	return u.stream.Outgoing()
+}
+
+func (u *unblocker) Done() <-chan struct{} {
+	return u.stream.Done()
+}
