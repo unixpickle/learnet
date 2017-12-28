@@ -9,7 +9,7 @@ import (
 
 func TestMultiplexerBasic(t *testing.T) {
 	stream := newTestingStream(10)
-	multi := Multiplex(stream, 10)
+	multi := Multiplex(stream, 10, true)
 	defer multi.Close()
 
 	stream1, err := multi.Fork()
@@ -45,7 +45,7 @@ func TestMultiplexerBasic(t *testing.T) {
 
 func TestMultiplexerPreFork(t *testing.T) {
 	stream := newTestingStream(10)
-	multi := Multiplex(stream, 10)
+	multi := Multiplex(stream, 10, true)
 	defer multi.Close()
 
 	stream.incoming <- []byte("hi")
@@ -83,7 +83,7 @@ func TestMultiplexerPreFork(t *testing.T) {
 
 func TestMultiplexerClose(t *testing.T) {
 	stream := newTestingStream(10)
-	multi := Multiplex(stream, 10)
+	multi := Multiplex(stream, 10, true)
 	defer multi.Close()
 
 	stream1, err := multi.Fork()
@@ -107,7 +107,7 @@ func TestMultiplexerClose(t *testing.T) {
 
 func TestMultiplexerParentClose(t *testing.T) {
 	stream := newTestingStream(10)
-	multi := Multiplex(stream, 10)
+	multi := Multiplex(stream, 10, true)
 	defer multi.Close()
 
 	stream1, err := multi.Fork()
@@ -132,7 +132,7 @@ func TestMultiplexerParentClose(t *testing.T) {
 
 func TestMultiplexerCloseBackpressure(t *testing.T) {
 	stream := newTestingStream(10)
-	multi := Multiplex(stream, 10)
+	multi := Multiplex(stream, 10, true)
 	defer multi.Close()
 
 	child, err := multi.Fork()
@@ -170,7 +170,7 @@ func TestMultiplexerCloseBackpressure(t *testing.T) {
 
 func TestMultiplexerCloseChildBackpressure(t *testing.T) {
 	stream := newTestingStream(10)
-	multi := Multiplex(stream, 10)
+	multi := Multiplex(stream, 10, true)
 	defer multi.Close()
 
 	child, err := multi.Fork()
@@ -223,7 +223,7 @@ func TestMultiplexerCloseChildBackpressure(t *testing.T) {
 
 func TestMultiplexerReadBackpressure(t *testing.T) {
 	stream := newTestingStream(10)
-	multi := Multiplex(stream, 10)
+	multi := Multiplex(stream, 10, true)
 	defer multi.Close()
 
 	child, err := multi.Fork()
@@ -254,7 +254,7 @@ func TestMultiplexerReadBackpressure(t *testing.T) {
 
 func TestMultiplexerWriteBackpressure(t *testing.T) {
 	stream := newTestingStream(10)
-	multi := Multiplex(stream, 10)
+	multi := Multiplex(stream, 10, true)
 	defer multi.Close()
 
 	child, err := multi.Fork()
@@ -280,6 +280,55 @@ func TestMultiplexerWriteBackpressure(t *testing.T) {
 	case child.Outgoing() <- []byte("bar"):
 	default:
 		t.Error("expected no backpressure")
+	}
+}
+
+func TestMultiplexerDropOnEmpty(t *testing.T) {
+	stream := newTestingStream(10)
+	multi := Multiplex(stream, 10, false)
+	defer multi.Close()
+
+	stream.incoming <- []byte("hi")
+
+	time.Sleep(time.Second / 5)
+
+	child, err := multi.Fork()
+	if err != nil {
+		t.Error(err)
+	}
+
+	time.Sleep(time.Second / 5)
+
+	select {
+	case <-child.Incoming():
+		t.Error("expected no pending packets")
+	default:
+	}
+}
+
+func TestMultiplexerBlockOnEmpty(t *testing.T) {
+	stream := newTestingStream(10)
+	multi := Multiplex(stream, 10, true)
+	defer multi.Close()
+
+	stream.incoming <- []byte("hi")
+
+	time.Sleep(time.Second / 5)
+
+	child, err := multi.Fork()
+	if err != nil {
+		t.Error(err)
+	}
+
+	time.Sleep(time.Second / 5)
+
+	select {
+	case buffer := <-child.Incoming():
+		if !bytes.Equal(buffer, []byte("hi")) {
+			t.Error("bad buffer")
+		}
+	default:
+		t.Error("expected a pending packet")
 	}
 }
 

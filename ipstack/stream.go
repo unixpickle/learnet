@@ -52,27 +52,35 @@ type MultiStream interface {
 }
 
 type multiplexer struct {
-	stream     Stream
-	lock       sync.Mutex
-	children   []*childStream
-	bufferSize int
-	writeChan  chan<- []byte
-	closeChan  chan struct{}
-	addChan    chan struct{}
+	stream       Stream
+	lock         sync.Mutex
+	children     []*childStream
+	bufferSize   int
+	blockOnEmpty bool
+	writeChan    chan<- []byte
+	closeChan    chan struct{}
+	addChan      chan struct{}
 }
 
 // Multiplex creates a MultiStream from a Stream.
 //
 // The bufferSize is the number of packets can be stored
 // in a read/write queue before backpressure takes place.
-func Multiplex(stream Stream, bufferSize int) MultiStream {
+//
+// If blockOnEmpty is true, then the multiplexer buffers
+// and provides backpressure on the stream if no child
+// streams are attached.
+// Otherwise, packets are dropped while no children are
+// attached.
+func Multiplex(stream Stream, bufferSize int, blockOnEmpty bool) MultiStream {
 	writeChan := make(chan []byte)
 	res := &multiplexer{
-		stream:     stream,
-		bufferSize: bufferSize,
-		writeChan:  writeChan,
-		closeChan:  make(chan struct{}),
-		addChan:    make(chan struct{}, 1),
+		stream:       stream,
+		bufferSize:   bufferSize,
+		blockOnEmpty: blockOnEmpty,
+		writeChan:    writeChan,
+		closeChan:    make(chan struct{}),
+		addChan:      make(chan struct{}, 1),
 	}
 	go res.readLoop()
 	go res.writeLoop(writeChan)
@@ -134,6 +142,9 @@ func (m *multiplexer) readLoop() {
 			m.lock.Lock()
 			children = append([]*childStream{}, m.children...)
 			m.lock.Unlock()
+			if !m.blockOnEmpty {
+				break
+			}
 			if len(children) == 0 {
 				select {
 				case <-m.addChan:
