@@ -12,6 +12,10 @@ type filterStream struct {
 // The incoming and outgoing filters take packets and
 // return modified packets (or nil to drop the packets).
 // If a filter function is nil, the packets go unchanged.
+//
+// The underlying stream should not be used anymore.
+// Rather, all operations should be performed on the
+// filtered stream.
 func Filter(s Stream, incoming, outgoing func(packet []byte) []byte) Stream {
 	res := &filterStream{parent: s, incoming: s.Incoming(), outgoing: s.Outgoing()}
 
@@ -68,4 +72,14 @@ func (f *filterStream) Outgoing() chan<- []byte {
 
 func (f *filterStream) Done() <-chan struct{} {
 	return f.parent.Done()
+}
+
+// Filter IPv4 packets for a given protocol.
+func FilterIPv4Proto(stream Stream, ipProto int) Stream {
+	return Filter(stream, func(packet []byte) []byte {
+		if len(packet) > 9 && packet[9] == byte(ipProto) {
+			return packet
+		}
+		return nil
+	}, nil)
 }
