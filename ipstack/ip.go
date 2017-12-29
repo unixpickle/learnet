@@ -64,23 +64,31 @@ func IPv4Proto(packet []byte) int {
 	return int(packet[9])
 }
 
-// IPv4Checksum computes the checksum of the packet's
-// header.
+// IPv4Checksum computes the checksum of the data.
 //
-// If the packet has a valid checksum, this is 0.
+// For IPv4 packets, the data should be a header.
 //
-// The packet is assumed to be valid.
-func IPv4Checksum(header []byte) uint16 {
-	if len(header)%2 != 0 {
-		panic("header length must be divisible by 2")
-	}
+// A checksum of 0 is expected for valid data.
+func IPv4Checksum(data []byte) uint16 {
+	// Adapted from C example in RFC 1071:
+	// https://tools.ietf.org/html/rfc1071.
+
 	var sum uint32
-	for i := 0; i < len(header); i += 2 {
-		sum += uint32(header[i]) << 8
-		sum += uint32(header[i+1])
+
+	for len(data) >= 2 {
+		sum += (uint32(data[0]) << 8) | uint32(data[1])
+		data = data[2:]
 	}
-	sum16 := uint16(sum) + uint16(sum>>16)
-	return ^sum16
+
+	if len(data) == 1 {
+		sum += uint32(data[0])
+	}
+
+	for (sum >> 16) != 0 {
+		sum = (sum & 0xffff) + (sum >> 16)
+	}
+
+	return ^uint16(sum)
 }
 
 // IPv4SetChecksum inserts the checksum into a packet's

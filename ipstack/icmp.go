@@ -13,28 +13,11 @@ const (
 //
 // The payload is assumed to be valid.
 func ICMPChecksum(payload []byte) uint16 {
-	// Adapted from C example in RFC 1071:
-	// https://tools.ietf.org/html/rfc1071.
-
-	var sum uint32
-
-	for len(payload) >= 2 {
-		sum += (uint32(payload[0]) << 8) | uint32(payload[1])
-		payload = payload[2:]
-	}
-
-	if len(payload) == 1 {
-		sum += uint32(payload[0])
-	}
-
-	for (sum >> 16) != 0 {
-		sum = (sum & 0xffff) + (sum >> 16)
-	}
-
-	return ^uint16(sum)
+	return IPv4Checksum(payload)
 }
 
-// ICMPSetChecksum inserts a checksum into an ICMP packet.
+// ICMPSetChecksum inserts a checksum into an ICMP
+// payload.
 //
 // The payload is assumed to be valid.
 func ICMPSetChecksum(payload []byte) {
@@ -45,8 +28,8 @@ func ICMPSetChecksum(payload []byte) {
 	payload[3] = byte(checksum)
 }
 
-// RespondToPings runs a loop that responds to pings on
-// the stream.
+// RespondToPingsIPv4 runs a loop that responds to pings
+// on the stream.
 //
 // This responds to pings in a synchronous manner, meaning
 // that write backpressure can prevent reads.
@@ -54,7 +37,7 @@ func ICMPSetChecksum(payload []byte) {
 // stream.
 //
 // This returns when the stream is closed.
-func RespondToPings(stream Stream) {
+func RespondToPingsIPv4(stream Stream) {
 	stream = FilterIPv4Proto(stream, ProtocolNumberICMP)
 
 	// TODO: ICMP checksum and validation filters.
