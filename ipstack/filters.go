@@ -1,10 +1,5 @@
 package ipstack
 
-import (
-	"bytes"
-	"net"
-)
-
 type filterStream struct {
 	parent   Stream
 	incoming <-chan []byte
@@ -77,24 +72,4 @@ func (f *filterStream) Outgoing() chan<- []byte {
 
 func (f *filterStream) Done() <-chan struct{} {
 	return f.parent.Done()
-}
-
-// Filter IPv4 packets for a given protocol.
-func FilterIPv4Proto(stream Stream, ipProto int) Stream {
-	return Filter(stream, func(packet []byte) []byte {
-		if len(packet) > 9 && packet[9] == byte(ipProto) {
-			return packet
-		}
-		return nil
-	}, nil)
-}
-
-// Filter incoming IPv4 packets for a destination address.
-func FilterIPv4Dest(stream Stream, dest net.IP) Stream {
-	return Filter(stream, func(packet []byte) []byte {
-		if len(packet) > 19 && bytes.Equal(packet[16:20], dest[len(dest)-4:]) {
-			return packet
-		}
-		return nil
-	}, nil)
 }
