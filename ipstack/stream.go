@@ -260,38 +260,95 @@ func (c *childStream) incomingLoop() {
 	}
 }
 
-type unblocker struct {
+type dropper struct {
 	stream   Stream
 	incoming <-chan []byte
+	outgoing chan<- []byte
 }
 
-// Unblock wraps the Stream with a read buffer so that
-// reads don't block.
+// Dropper wraps the Stream with a buffer so that I/O
+// operations don't experience backpressure.
+// Instead, I/O on the wrapped stream fills up buffers.
+// Once the buffers fill up, packets are dropped.
 //
-// After wrapping the stream, the wrapped stream should
-// not be accessed directly anymore.
-func Unblock(stream Stream, buffer int) Stream {
-	incoming := make(chan []byte, buffer)
-	go func() {
-		defer close(incoming)
-		for packet := range stream.Incoming() {
-			select {
-			case incoming <- packet:
-			default:
+// If a buffer size is 0, the corresponding channel is
+// unchanged from the underlying stream.
+//
+// The wrapped stream should not be accessed directly.
+// Rather, all operations should be directed to the new,
+// wrapped stream.
+func Dropper(stream Stream, readBuffer, writeBuffer int) Stream {
+	res := &dropper{stream: stream, incoming: stream.Incoming(), outgoing: stream.Outgoing()}
+
+	if readBuffer != 0 {
+		ch := make(chan []byte, readBuffer)
+		go func() {
+			defer close(ch)
+			for packet := range stream.Incoming() {
+				select {
+				case ch <- packet:
+				default:
+				}
 			}
-		}
-	}()
-	return &unblocker{stream: stream, incoming: incoming}
+		}()
+		res.incoming = ch
+	}
+
+	if writeBuffer != 0 {
+		publicChan := make(chan []byte)
+		privateChan := make(chan []byte, writeBuffer)
+		go func() {
+			defer close(stream.Outgoing())
+			for {
+				select {
+				case pack, ok := <-privateChan:
+					if !ok {
+						return
+					}
+					select {
+					case stream.Outgoing() <- pack:
+					case <-stream.Done():
+						return
+					}
+				case <-stream.Done():
+					return
+				}
+			}
+		}()
+
+		go func() {
+			defer close(privateChan)
+			for {
+				select {
+				case pack, ok := <-publicChan:
+					if !ok {
+						return
+					}
+					select {
+					case privateChan <- pack:
+					case <-stream.Done():
+						return
+					}
+				case <-stream.Done():
+					return
+				}
+			}
+		}()
+
+		res.outgoing = publicChan
+	}
+
+	return res
 }
 
-func (u *unblocker) Incoming() <-chan []byte {
-	return u.incoming
+func (d *dropper) Incoming() <-chan []byte {
+	return d.incoming
 }
 
-func (u *unblocker) Outgoing() chan<- []byte {
-	return u.stream.Outgoing()
+func (d *dropper) Outgoing() chan<- []byte {
+	return d.outgoing
 }
 
-func (u *unblocker) Done() <-chan struct{} {
-	return u.stream.Done()
+func (d *dropper) Done() <-chan struct{} {
+	return d.stream.Done()
 }
