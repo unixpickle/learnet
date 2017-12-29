@@ -7,11 +7,24 @@ const (
 	ICMPTypeEchoRequest = 8
 )
 
-// ICMPChecksum computes the checksum of the ICMP packet.
-//
-// If the packet has a valid checksum, this is 0.
+// ICMPValid checks if an ICMP payload is valid.
+func ICMPValid(payload []byte) bool {
+	if len(payload) < 8 {
+		return false
+	}
+	return true
+}
+
+// ICMPType extracts the ICMP type from the payload.
 //
 // The payload is assumed to be valid.
+func ICMPType(payload []byte) int {
+	return int(payload[0])
+}
+
+// ICMPChecksum computes the checksum of the ICMP payload.
+//
+// A checksum of 0 is expected.
 func ICMPChecksum(payload []byte) uint16 {
 	return IPv4Checksum(payload)
 }
@@ -40,22 +53,24 @@ func ICMPSetChecksum(payload []byte) {
 func RespondToPingsIPv4(stream Stream) {
 	stream = FilterIPv4Proto(stream, ProtocolNumberICMP)
 
-	// TODO: ICMP checksum and validation filters.
-
 	for packet := range stream.Incoming() {
 		payload := IPv4Payload(packet)
-		if payload[0] == ICMPTypeEchoRequest {
-			source := append([]byte{}, IPv4SourceAddr(packet)...)
-			copy(IPv4SourceAddr(packet), IPv4DestAddr(packet))
-			copy(IPv4DestAddr(packet), source)
-			payload[0] = ICMPTypeEchoReply
-			ICMPSetChecksum(payload)
-			IPv4SetChecksum(packet)
-			select {
-			case stream.Outgoing() <- packet:
-			case <-stream.Done():
-				return
-			}
+		if !ICMPValid(payload) || ICMPChecksum(payload) != 0 ||
+			ICMPType(payload) != ICMPTypeEchoRequest {
+			continue
+		}
+
+		source := append([]byte{}, IPv4SourceAddr(packet)...)
+		copy(IPv4SourceAddr(packet), IPv4DestAddr(packet))
+		copy(IPv4DestAddr(packet), source)
+		payload[0] = ICMPTypeEchoReply
+		ICMPSetChecksum(payload)
+		IPv4SetChecksum(packet)
+
+		select {
+		case stream.Outgoing() <- packet:
+		case <-stream.Done():
+			return
 		}
 	}
 }

@@ -68,7 +68,7 @@ func IPv4Proto(packet []byte) int {
 //
 // For IPv4 packets, the data should be a header.
 //
-// A checksum of 0 is expected for valid data.
+// A checksum of 0 is expected.
 func IPv4Checksum(data []byte) uint16 {
 	// Adapted from C example in RFC 1071:
 	// https://tools.ietf.org/html/rfc1071.
