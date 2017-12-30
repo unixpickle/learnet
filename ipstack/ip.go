@@ -91,6 +91,21 @@ func (i IPv4Packet) SetChecksum() {
 	i[11] = byte(checksum)
 }
 
+// Identification returns the packet's ID number.
+//
+// The packet is assumed to be valid.
+func (i IPv4Packet) Identification() uint16 {
+	return (uint16(i[4]) << 8) | uint16(i[5])
+}
+
+// SetIdentification updates the packet's ID number.
+//
+// The packet is assumed to be valid.
+func (i IPv4Packet) SetIdentification(id uint16) {
+	i[4] = byte(id >> 8)
+	i[5] = byte(id)
+}
+
 // FragmentInfo returns the packet's fragment fields.
 //
 // The fragOffset value is measured in 8-byte blocks.
@@ -119,7 +134,7 @@ func (i IPv4Packet) SetFragmentInfo(dontFrag, moreFrags bool, fragOffset int) {
 	i[7] |= uint8(fragOffset)
 }
 
-// Filter IPv4 packets that are valid.
+// FilterIPv4Valid filters packets that are valid.
 func FilterIPv4Valid(stream Stream) Stream {
 	return Filter(stream, func(packet []byte) []byte {
 		if IPv4Packet(packet).Valid() {
@@ -129,7 +144,7 @@ func FilterIPv4Valid(stream Stream) Stream {
 	}, nil)
 }
 
-// Filter IPv4 packets with valid checksums.
+// FilterIPv4Checksums drops packets with bad checksums.
 //
 // All incoming packets are assumed to be valid.
 func FilterIPv4Checksums(stream Stream) Stream {
@@ -141,7 +156,8 @@ func FilterIPv4Checksums(stream Stream) Stream {
 	}, nil)
 }
 
-// Filter IPv4 packets for a given protocol.
+// FilterIPv4Proto filters packets for a specific IP
+// protocol.
 //
 // All incoming packets are assumed to be valid.
 func FilterIPv4Proto(stream Stream, ipProto int) Stream {
@@ -153,7 +169,8 @@ func FilterIPv4Proto(stream Stream, ipProto int) Stream {
 	}, nil)
 }
 
-// Filter incoming IPv4 packets for a destination address.
+// FilterIPv4Dest filters packets for a specific
+// destination address.
 //
 // All incoming packets are assumed to be valid.
 func FilterIPv4Dest(stream Stream, dest net.IP) Stream {
