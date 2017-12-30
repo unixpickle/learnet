@@ -1,24 +1,26 @@
 package ipstack
 
-// TODO: add FilterFunc type.
+// A FilterFunc modifies or drops packets.
+//
+// The function may modify a packet or create and return
+// an entirely new packet.
+// If the function returns nil, then the packet is
+// dropped altogether.
+type FilterFunc func(packet []byte) []byte
 
 type filterStream struct {
 	Stream
 	incoming       <-chan []byte
-	outgoingFilter func(packet []byte) []byte
+	outgoingFilter FilterFunc
 }
 
 // Filter wraps a Stream and uses the functions to process
 // or drop the packets.
 //
-// The incoming and outgoing filters take packets and
-// return modified packets (or nil to drop the packets).
-// If a filter function is nil, the packets go unchanged.
-//
 // The underlying stream should not be used anymore.
 // Rather, all operations should be performed on the
 // filtered stream.
-func Filter(s Stream, incoming, outgoing func(packet []byte) []byte) Stream {
+func Filter(s Stream, incoming, outgoing FilterFunc) Stream {
 	res := &filterStream{Stream: s, incoming: s.Incoming(), outgoingFilter: outgoing}
 
 	if incoming != nil {
