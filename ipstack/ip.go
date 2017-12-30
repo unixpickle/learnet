@@ -201,7 +201,7 @@ func AddIPv4Identifiers(stream Stream) Stream {
 		lock.Unlock()
 		dontFrag, moreFrags, offset := ipPacket.FragmentInfo()
 		if moreFrags || offset != 0 {
-			panic("cannot add IDs to fragmented packets")
+			return nil
 		}
 		ipPacket.SetFragmentInfo(dontFrag, false, 0)
 		ipPacket.SetIdentification(id)
