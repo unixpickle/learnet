@@ -176,6 +176,7 @@ func (m *multiplexer) Close() error {
 	}
 
 	close(m.closeChan)
+	m.stream.Close()
 
 	for _, child := range m.children {
 		close(child.done)
@@ -231,6 +232,10 @@ func (m *multiplexer) closed() bool {
 func (m *multiplexer) childWrite(child *childStream, data []byte) error {
 	m.lock.Lock()
 	defer m.lock.Unlock()
+
+	if m.closed() {
+		return AlreadyClosedErr
+	}
 
 	// Make sure the child isn't closed.
 	for _, ch := range m.children {

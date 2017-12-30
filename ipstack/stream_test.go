@@ -2,7 +2,9 @@ package ipstack
 
 import (
 	"bytes"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestMultiplexerBasic(t *testing.T) {
@@ -89,5 +91,56 @@ func TestMultiplexerParentClose(t *testing.T) {
 	<-stream2.Incoming()
 }
 
-// TODO: test closing (both closing parent & multiplexer)
-// when the stream is flooded with packets.
+func TestMultiplexerClosePipeFlood(t *testing.T) {
+	testMultiplexerCloseFlood(t, true)
+}
+
+func TestMultiplexerCloseMultiFlood(t *testing.T) {
+	testMultiplexerCloseFlood(t, false)
+}
+
+func testMultiplexerCloseFlood(t *testing.T, closePipe bool) {
+	parent, pipe := Pipe(10, 10)
+	multi := Multiplex(parent)
+	defer multi.Close()
+
+	child, err := multi.Fork(10)
+	if err != nil {
+		t.Error(err)
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 3; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				pipe.Write([]byte("hi"))
+				select {
+				case <-pipe.Done():
+					return
+				default:
+				}
+			}
+		}()
+	}
+
+	// Make sure messages are flooding in.
+	for i := 0; i < 100; i++ {
+		<-child.Incoming()
+	}
+
+	time.Sleep(time.Second / 5)
+
+	if closePipe {
+		pipe.Close()
+	} else {
+		multi.Close()
+	}
+
+	for _ = range child.Incoming() {
+	}
+	<-child.Done()
+
+	wg.Wait()
+}
