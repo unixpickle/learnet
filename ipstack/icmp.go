@@ -44,11 +44,6 @@ func ICMPSetChecksum(payload []byte) {
 // RespondToPingsIPv4 runs a loop that responds to pings
 // on the stream.
 //
-// This responds to pings in a synchronous manner, meaning
-// that write backpressure can prevent reads.
-// Thus, it is recommended that you use a write-dropping
-// stream.
-//
 // This returns when the stream is closed.
 func RespondToPingsIPv4(stream Stream) {
 	stream = FilterIPv4Proto(stream, ProtocolNumberICMP)
@@ -67,10 +62,6 @@ func RespondToPingsIPv4(stream Stream) {
 		ICMPSetChecksum(payload)
 		IPv4SetChecksum(packet)
 
-		select {
-		case stream.Outgoing() <- packet:
-		case <-stream.Done():
-			return
-		}
+		stream.Write(packet)
 	}
 }

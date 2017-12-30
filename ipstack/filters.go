@@ -1,9 +1,11 @@
 package ipstack
 
+// TODO: add FilterFunc type.
+
 type filterStream struct {
-	parent   Stream
-	incoming <-chan []byte
-	outgoing chan<- []byte
+	Stream
+	incoming       <-chan []byte
+	outgoingFilter func(packet []byte) []byte
 }
 
 // Filter wraps a Stream and uses the functions to process
@@ -17,7 +19,7 @@ type filterStream struct {
 // Rather, all operations should be performed on the
 // filtered stream.
 func Filter(s Stream, incoming, outgoing func(packet []byte) []byte) Stream {
-	res := &filterStream{parent: s, incoming: s.Incoming(), outgoing: s.Outgoing()}
+	res := &filterStream{Stream: s, incoming: s.Incoming(), outgoingFilter: outgoing}
 
 	if incoming != nil {
 		ch := make(chan []byte)
@@ -26,37 +28,15 @@ func Filter(s Stream, incoming, outgoing func(packet []byte) []byte) Stream {
 			for packet := range s.Incoming() {
 				packet = incoming(packet)
 				if packet != nil {
-					ch <- packet
+					select {
+					case ch <- packet:
+					case <-s.Done():
+						return
+					}
 				}
 			}
 		}()
 		res.incoming = ch
-	}
-
-	if outgoing != nil {
-		ch := make(chan []byte)
-		go func() {
-			defer close(s.Outgoing())
-			for {
-				select {
-				case packet, ok := <-ch:
-					if !ok {
-						return
-					}
-					packet = outgoing(packet)
-					if packet != nil {
-						select {
-						case s.Outgoing() <- packet:
-						case <-s.Done():
-							return
-						}
-					}
-				case <-s.Done():
-					return
-				}
-			}
-		}()
-		res.outgoing = ch
 	}
 
 	return res
@@ -66,10 +46,12 @@ func (f *filterStream) Incoming() <-chan []byte {
 	return f.incoming
 }
 
-func (f *filterStream) Outgoing() chan<- []byte {
-	return f.outgoing
-}
-
-func (f *filterStream) Done() <-chan struct{} {
-	return f.parent.Done()
+func (f *filterStream) Write(buf []byte) error {
+	if f.outgoingFilter != nil {
+		buf = f.outgoingFilter(buf)
+		if buf == nil {
+			return nil
+		}
+	}
+	return f.Stream.Write(buf)
 }

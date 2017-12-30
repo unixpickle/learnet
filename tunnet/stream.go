@@ -32,8 +32,32 @@ func (t *tunnelStream) Incoming() <-chan []byte {
 	return t.incoming
 }
 
-func (t *tunnelStream) Outgoing() chan<- []byte {
-	return t.outgoing
+func (t *tunnelStream) Write(packet []byte) error {
+	select {
+	case <-t.done:
+		return ipstack.WriteClosedErr
+	default:
+	}
+
+	select {
+	case t.outgoing <- packet:
+		return nil
+	case <-t.done:
+		return ipstack.WriteClosedErr
+	default:
+		return ipstack.WriteBufferFullErr
+	}
+}
+
+func (t *tunnelStream) Close() error {
+	select {
+	case <-t.done:
+		return ipstack.AlreadyClosedErr
+	default:
+	}
+	t.tunnel.Close()
+	<-t.done
+	return nil
 }
 
 func (t *tunnelStream) Done() <-chan struct{} {
@@ -48,7 +72,10 @@ func (t *tunnelStream) readLoop(done chan<- struct{}, incoming chan<- []byte) {
 		if err != nil {
 			return
 		}
-		incoming <- packet
+		select {
+		case incoming <- packet:
+		default:
+		}
 	}
 }
 
@@ -58,7 +85,7 @@ func (t *tunnelStream) writeLoop(outgoing <-chan []byte) {
 		select {
 		case packet, ok := <-outgoing:
 			if !ok {
-				return
+				panic("outgoing channel closed")
 			}
 			t.tunnel.WritePacket(packet)
 		case <-t.done:

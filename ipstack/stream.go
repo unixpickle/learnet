@@ -7,15 +7,26 @@ import (
 	"github.com/unixpickle/essentials"
 )
 
+var (
+	AlreadyClosedErr   = errors.New("close: stream is closed")
+	WriteBufferFullErr = errors.New("write: buffer is full")
+	WriteClosedErr     = errors.New("write: stream is closed")
+)
+
+const DefaultBufferSize = 100
+
 // A Stream is a bidirectional stream of packets.
 //
-// A Stream could be attached to anything from a network
-// interface to a TCP connection.
+// Streams are non-blocking and can never apply
+// backpressure to a source or a sender.
+// Thus, you should only use a Stream to represent a
+// connection that allows for packet loss.
 //
-// Closing a stream should close the incoming channel and
-// the done channel.
+// When a stream closes (either due to a Close() or a
+// disconnect), the Incoming() and Done() channels are
+// closed.
 type Stream interface {
-	// Incoming returns a channel of incoming packets.
+	// Incoming returns the channel of incoming packets.
 	//
 	// The channel is closed when the stream is closed or
 	// disconnected.
@@ -23,13 +34,15 @@ type Stream interface {
 	// Received buffers belong to the receiver.
 	Incoming() <-chan []byte
 
-	// Outgoing returns a channel for sending packets.
-	//
-	// Closing this channel to closes the Stream.
+	// Write sends a packet to the Stream in a non-blocking
+	// manner.
 	//
 	// After sending a buffer, the buffer belongs to the
-	// Stream.
-	Outgoing() chan<- []byte
+	// Stream, even if the write fails.
+	Write([]byte) error
+
+	// Close shuts down the Stream.
+	Close() error
 
 	// Done returns a channel which is closed automatically
 	// when the Stream is closed or disconnected.
@@ -41,10 +54,9 @@ type MultiStream interface {
 	// Fork creates a Stream that reads/writes to the
 	// underlying Stream.
 	//
-	// The child Stream will provide back-pressure on the
-	// parent, meaning that if you don't read packets on the
-	// child, packets will stop flowing through the parent.
-	Fork() (Stream, error)
+	// The child Stream will buffer up to readBuffer packets,
+	// after which point packets will be dropped.
+	Fork(readBuffer int) (Stream, error)
 
 	// Close closes the underlying Stream and all the child
 	// streams.
@@ -52,47 +64,27 @@ type MultiStream interface {
 }
 
 type multiplexer struct {
-	stream       Stream
-	lock         sync.Mutex
-	children     []*childStream
-	bufferSize   int
-	blockOnEmpty bool
-	writeChan    chan<- []byte
-	closeChan    chan struct{}
-	addChan      chan struct{}
+	stream    Stream
+	lock      sync.Mutex
+	children  []*childStream
+	closeChan chan struct{}
 }
 
 // Multiplex creates a MultiStream from a Stream.
-//
-// The bufferSize is the number of packets can be stored
-// in a read/write queue before backpressure takes place.
-//
-// If blockOnEmpty is true, then the multiplexer buffers
-// and provides backpressure on the stream if no child
-// streams are attached.
-// Otherwise, packets are dropped while no children are
-// attached.
-func Multiplex(stream Stream, bufferSize int, blockOnEmpty bool) MultiStream {
-	writeChan := make(chan []byte)
+func Multiplex(stream Stream) MultiStream {
 	res := &multiplexer{
-		stream:       stream,
-		bufferSize:   bufferSize,
-		blockOnEmpty: blockOnEmpty,
-		writeChan:    writeChan,
-		closeChan:    make(chan struct{}),
-		addChan:      make(chan struct{}, 1),
+		stream:    stream,
+		closeChan: make(chan struct{}),
 	}
 	go res.readLoop()
-	go res.writeLoop(writeChan)
 	return res
 }
 
-func (m *multiplexer) Fork() (Stream, error) {
+func (m *multiplexer) Fork(readBuffer int) (Stream, error) {
 	child := &childStream{
-		rawIncoming: make(chan []byte, m.bufferSize),
-		incoming:    make(chan []byte),
-		outgoing:    make(chan []byte, m.bufferSize),
-		done:        make(chan struct{}),
+		parent:   m,
+		incoming: make(chan []byte, readBuffer),
+		done:     make(chan struct{}),
 	}
 
 	m.lock.Lock()
@@ -102,18 +94,6 @@ func (m *multiplexer) Fork() (Stream, error) {
 	}
 	m.children = append(m.children, child)
 
-	go child.outgoingLoop(m.closeChan, m.writeChan)
-	go child.incomingLoop()
-	go func() {
-		<-child.done
-		m.removeChild(child)
-	}()
-
-	select {
-	case m.addChan <- struct{}{}:
-	default:
-	}
-
 	return child, nil
 }
 
@@ -122,9 +102,15 @@ func (m *multiplexer) Close() error {
 	defer m.lock.Unlock()
 
 	if m.closed() {
-		return errors.New("already closed")
+		return AlreadyClosedErr
 	}
+
 	close(m.closeChan)
+
+	for _, child := range m.children {
+		close(child.done)
+		close(child.incoming)
+	}
 
 	return nil
 }
@@ -132,57 +118,35 @@ func (m *multiplexer) Close() error {
 func (m *multiplexer) readLoop() {
 	defer m.Close()
 	for {
-		packet, ok := <-m.stream.Incoming()
-		if !ok {
-			return
-		}
-
-		var children []*childStream
-		for len(children) == 0 {
-			m.lock.Lock()
-			children = append([]*childStream{}, m.children...)
-			m.lock.Unlock()
-			if !m.blockOnEmpty {
-				break
-			}
-			if len(children) == 0 {
-				select {
-				case <-m.addChan:
-				case <-m.closeChan:
-					return
-				case <-m.stream.Done():
-					return
-				}
-			}
-		}
-
-		for _, child := range children {
-			select {
-			case child.rawIncoming <- packet:
-			case <-child.done:
-			case <-m.stream.Done():
-				return
-			case <-m.closeChan:
-				return
-			}
-		}
-	}
-}
-
-func (m *multiplexer) writeLoop(writeChan <-chan []byte) {
-	defer close(m.stream.Outgoing())
-	for {
 		select {
-		case packet := <-writeChan:
-			select {
-			case m.stream.Outgoing() <- packet:
-			case <-m.closeChan:
+		case packet := <-m.stream.Incoming():
+			if !m.handleIncoming(packet) {
 				return
 			}
+		case <-m.stream.Done():
+			return
 		case <-m.closeChan:
 			return
 		}
 	}
+}
+
+func (m *multiplexer) handleIncoming(packet []byte) bool {
+	m.lock.Lock()
+	defer m.lock.Unlock()
+
+	if m.closed() {
+		return false
+	}
+
+	for _, child := range m.children {
+		select {
+		case child.incoming <- append([]byte{}, packet...):
+		default:
+		}
+	}
+
+	return true
 }
 
 func (m *multiplexer) closed() bool {
@@ -194,161 +158,54 @@ func (m *multiplexer) closed() bool {
 	}
 }
 
-func (m *multiplexer) removeChild(child *childStream) {
+func (m *multiplexer) childWrite(child *childStream, data []byte) error {
+	m.lock.Lock()
+	defer m.lock.Unlock()
+
+	// Make sure the child isn't closed.
+	for _, ch := range m.children {
+		if ch == child {
+			return m.stream.Write(data)
+		}
+	}
+
+	return WriteClosedErr
+}
+
+func (m *multiplexer) childClose(child *childStream) error {
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
 	for i, ch := range m.children {
 		if ch == child {
 			essentials.UnorderedDelete(&m.children, i)
-			break
+			close(child.done)
+			close(child.incoming)
+			return nil
 		}
 	}
+
+	return AlreadyClosedErr
 }
 
 type childStream struct {
-	rawIncoming chan []byte
-	incoming    chan []byte
-	outgoing    chan []byte
-	done        chan struct{}
+	parent   *multiplexer
+	incoming chan []byte
+	done     chan struct{}
 }
 
 func (c *childStream) Incoming() <-chan []byte {
 	return c.incoming
 }
 
-func (c *childStream) Outgoing() chan<- []byte {
-	return c.outgoing
+func (c *childStream) Write(data []byte) error {
+	return c.parent.childWrite(c, data)
+}
+
+func (c *childStream) Close() error {
+	return c.parent.childClose(c)
 }
 
 func (c *childStream) Done() <-chan struct{} {
 	return c.done
-}
-
-func (c *childStream) outgoingLoop(closeChan chan struct{}, writeChan chan<- []byte) {
-	defer close(c.done)
-	for {
-		select {
-		case packet, ok := <-c.outgoing:
-			if !ok {
-				return
-			}
-			select {
-			case writeChan <- packet:
-			case <-closeChan:
-				return
-			}
-		case <-closeChan:
-			return
-		}
-	}
-}
-
-func (c *childStream) incomingLoop() {
-	defer close(c.incoming)
-	for {
-		select {
-		case packet := <-c.rawIncoming:
-			select {
-			case c.incoming <- packet:
-			case <-c.done:
-				return
-			}
-		case <-c.done:
-			return
-		}
-	}
-}
-
-type dropper struct {
-	stream   Stream
-	incoming <-chan []byte
-	outgoing chan<- []byte
-}
-
-// Dropper wraps the Stream with a buffer so that I/O
-// operations don't experience backpressure.
-// Instead, I/O on the wrapped stream fills up buffers.
-// Once the buffers fill up, packets are dropped.
-//
-// If a buffer size is 0, the corresponding channel is
-// unchanged from the underlying stream.
-//
-// The wrapped stream should not be accessed directly.
-// Rather, all operations should be directed to the new,
-// wrapped stream.
-func Dropper(stream Stream, readBuffer, writeBuffer int) Stream {
-	res := &dropper{stream: stream, incoming: stream.Incoming(), outgoing: stream.Outgoing()}
-
-	if readBuffer != 0 {
-		ch := make(chan []byte, readBuffer)
-		go func() {
-			defer close(ch)
-			for packet := range stream.Incoming() {
-				select {
-				case ch <- packet:
-				default:
-				}
-			}
-		}()
-		res.incoming = ch
-	}
-
-	if writeBuffer != 0 {
-		publicChan := make(chan []byte)
-		privateChan := make(chan []byte, writeBuffer)
-		go func() {
-			defer close(stream.Outgoing())
-			for {
-				select {
-				case pack, ok := <-privateChan:
-					if !ok {
-						return
-					}
-					select {
-					case stream.Outgoing() <- pack:
-					case <-stream.Done():
-						return
-					}
-				case <-stream.Done():
-					return
-				}
-			}
-		}()
-
-		go func() {
-			defer close(privateChan)
-			for {
-				select {
-				case pack, ok := <-publicChan:
-					if !ok {
-						return
-					}
-					select {
-					case privateChan <- pack:
-					case <-stream.Done():
-						return
-					}
-				case <-stream.Done():
-					return
-				}
-			}
-		}()
-
-		res.outgoing = publicChan
-	}
-
-	return res
-}
-
-func (d *dropper) Incoming() <-chan []byte {
-	return d.incoming
-}
-
-func (d *dropper) Outgoing() chan<- []byte {
-	return d.outgoing
-}
-
-func (d *dropper) Done() <-chan struct{} {
-	return d.stream.Done()
 }
