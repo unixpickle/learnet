@@ -10,6 +10,21 @@ import (
 // received on an IPv4 connection.
 type IPv4Packet []byte
 
+// NewIPv4Packet creates a valid IPv4Packet for the data.
+func NewIPv4Packet(ttl, proto int, source, dest net.IP, payload []byte) IPv4Packet {
+	res := make(IPv4Packet, 20+len(payload))
+	res[0] = 0x45
+
+	totalLen := uint16(len(payload) + 20)
+	res[2] = byte(totalLen >> 8)
+	res[3] = byte(totalLen)
+
+	res.SetTTL(ttl)
+	res.SetProto(proto)
+
+	return res
+}
+
 // Valid checks that various fields of the packet are
 // correct or within range.
 //
@@ -66,9 +81,24 @@ func (i IPv4Packet) DestAddr() net.IP {
 	return net.IP(i[16:20])
 }
 
+// TTL extracts the time to live field from the packet.
+func (i IPv4Packet) TTL() int {
+	return int(i[8])
+}
+
+// SetTTL sets the time to live field for the packet.
+func (i IPv4Packet) SetTTL(ttl int) {
+	i[8] = byte(ttl)
+}
+
 // Proto extracts the protocol ID from the packet.
 func (i IPv4Packet) Proto() int {
 	return int(i[9])
+}
+
+// SetProto sets the protocol ID field.
+func (i IPv4Packet) SetProto(proto int) {
+	i[9] = byte(proto)
 }
 
 // Checksum computes the checksum of the header.
