@@ -3,6 +3,7 @@ package ipstack
 import (
 	"bytes"
 	"net"
+	"sync"
 )
 
 // An IPv4Packet is a single packet intended to be sent or
@@ -180,4 +181,31 @@ func FilterIPv4Dest(stream Stream, dest net.IP) Stream {
 		}
 		return nil
 	}, nil)
+}
+
+// AddIPv4Identifiers assigns incrementing identification
+// numbers to the outgoing packets.
+//
+// This should only be used if the outgoing packets are
+// never going to be fragmented.
+//
+// All outgoing packets are assumed to be valid.
+func AddIPv4Identifiers(stream Stream) Stream {
+	var curId uint16
+	var lock sync.Mutex
+	return Filter(stream, nil, func(packet []byte) []byte {
+		ipPacket := IPv4Packet(packet)
+		lock.Lock()
+		id := curId
+		curId += 1
+		lock.Unlock()
+		dontFrag, moreFrags, offset := ipPacket.FragmentInfo()
+		if moreFrags || offset != 0 {
+			panic("cannot add IDs to fragmented packets")
+		}
+		ipPacket.SetFragmentInfo(dontFrag, false, 0)
+		ipPacket.SetIdentification(id)
+		ipPacket.SetChecksum()
+		return packet
+	})
 }
