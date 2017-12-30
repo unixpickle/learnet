@@ -21,7 +21,12 @@ const DefaultDefragmentTimeout = time.Second
 // The timeout indicates how long to keep fragmented
 // packets around before giving up on them.
 // If 0 is passed, DefaultDefragmentTimeout is used.
+//
+// All incoming packets are assumed to be valid.
 func DefragmentIncomingIPv4(stream Stream, timeout time.Duration) Stream {
+	if timeout == 0 {
+		timeout = DefaultDefragmentTimeout
+	}
 	defrag := &ipv4Defragmenter{timeout: int64(timeout / time.Nanosecond)}
 	return Filter(stream, func(packet []byte) []byte {
 		ipPacket := IPv4Packet(packet)
@@ -37,6 +42,11 @@ func DefragmentIncomingIPv4(stream Stream, timeout time.Duration) Stream {
 // fragments.
 //
 // The mtu argument specifies the maximum packet size.
+//
+// All outgoing packets should already have unique
+// identifiers, e.g. from AddIPv4Identifiers().
+//
+// All outgoing packets are assumed to be valid.
 func FragmentOutgoingIPv4(stream Stream, mtu int) Stream {
 	return &ipv4Fragmenter{Stream: stream, MTU: mtu}
 }
@@ -54,6 +64,13 @@ func (i *ipv4Fragmenter) Write(packet []byte) error {
 	header := ipPacket.Header()
 	payload := ipPacket.Payload()
 
+	dontFrag, more, existingOffset := ipPacket.FragmentInfo()
+	if dontFrag {
+		return errors.New("write: packet cannot be fragmented")
+	} else if more || existingOffset != 0 {
+		return errors.New("write: packet is already fragmented")
+	}
+
 	maxPayload := i.MTU - len(header)
 	maxPayload ^= maxPayload & 7
 
@@ -61,16 +78,16 @@ func (i *ipv4Fragmenter) Write(packet []byte) error {
 		return errors.New("write: no room for payload")
 	}
 
-	for len(payload) > 0 {
-		chunkSize := maxPayload
-		if chunkSize > len(payload) {
-			chunkSize = len(payload)
-		}
-		next := append(append(IPv4Packet{}, header...), payload[:chunkSize]...)
+	offset := 0
+	for len(payload)-offset > 0 {
+		chunkSize := essentials.MinInt(maxPayload, len(payload)-offset)
+		next := append(append(IPv4Packet{}, header...), payload[offset:offset+chunkSize]...)
+		next.SetFragmentInfo(false, chunkSize+offset < len(payload), offset>>3)
+		next.SetChecksum()
 		if err := i.Stream.Write(next); err != nil {
 			return err
 		}
-		payload = payload[chunkSize:]
+		offset += chunkSize
 	}
 
 	return nil
