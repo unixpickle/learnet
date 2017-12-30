@@ -63,6 +63,76 @@ type MultiStream interface {
 	Close() error
 }
 
+type pipeStream struct {
+	other *pipeStream
+
+	pairLock *sync.Mutex
+
+	closed   bool
+	incoming chan []byte
+	outgoing chan []byte
+	done     chan struct{}
+}
+
+// Pipe creates two connected Streams.
+//
+// The rightBuffer determines the buffer size when writing
+// to s1, whereas the leftBuffer determines the buffer
+// size when writing to s2.
+func Pipe(rightBuffer, leftBuffer int) (s1, s2 Stream) {
+	right := make(chan []byte, rightBuffer)
+	left := make(chan []byte, leftBuffer)
+	done := make(chan struct{})
+	lock := &sync.Mutex{}
+
+	pipe1 := &pipeStream{pairLock: lock, incoming: left, outgoing: right, done: done}
+	pipe2 := &pipeStream{pairLock: lock, incoming: right, outgoing: left, done: done}
+	pipe1.other = pipe2
+	pipe2.other = pipe1
+
+	return pipe1, pipe2
+}
+
+func (p *pipeStream) Incoming() <-chan []byte {
+	return p.incoming
+}
+
+func (p *pipeStream) Write(packet []byte) error {
+	p.pairLock.Lock()
+	defer p.pairLock.Unlock()
+
+	if p.closed || p.other.closed {
+		return WriteClosedErr
+	}
+
+	select {
+	case p.outgoing <- packet:
+		return nil
+	default:
+		return WriteBufferFullErr
+	}
+}
+
+func (p *pipeStream) Close() error {
+	p.pairLock.Lock()
+	defer p.pairLock.Unlock()
+
+	if p.closed {
+		return AlreadyClosedErr
+	}
+	p.closed = true
+	if !p.other.closed {
+		close(p.done)
+		close(p.incoming)
+		close(p.outgoing)
+	}
+	return nil
+}
+
+func (p *pipeStream) Done() <-chan struct{} {
+	return p.done
+}
+
 type multiplexer struct {
 	stream    Stream
 	lock      sync.Mutex
