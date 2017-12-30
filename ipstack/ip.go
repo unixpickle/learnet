@@ -91,6 +91,34 @@ func (i IPv4Packet) SetChecksum() {
 	i[11] = byte(checksum)
 }
 
+// FragmentInfo returns the packet's fragment fields.
+//
+// The fragOffset value is measured in 8-byte blocks.
+//
+// The packet is assumed to be valid.
+func (i IPv4Packet) FragmentInfo() (dontFrag, moreFrags bool, fragOffset int) {
+	dontFrag = (i[6] & 0x80) != 0
+	moreFrags = (i[6] & 0x40) != 0
+	fragOffset = (int(i[6]&0x1f) << 8) | int(i[7])
+	return
+}
+
+// SetFragmentInfo updates the packet's fragment fields.
+//
+// The packet is assumed to be valid.
+func (i IPv4Packet) SetFragmentInfo(dontFrag, moreFrags bool, fragOffset int) {
+	i[6] = 0
+	i[7] = 0
+	if dontFrag {
+		i[6] |= 0x80
+	}
+	if moreFrags {
+		i[6] |= 0x40
+	}
+	i[6] |= uint8(fragOffset>>8) & 0x1f
+	i[7] |= uint8(fragOffset)
+}
+
 // Filter IPv4 packets that are valid.
 func FilterIPv4Valid(stream Stream) Stream {
 	return Filter(stream, func(packet []byte) []byte {
