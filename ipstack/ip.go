@@ -5,109 +5,96 @@ import (
 	"net"
 )
 
-// IPv4Valid checks if the IP packet is valid.
-func IPv4Valid(packet []byte) bool {
-	if len(packet) < 20 {
+// An IPv4Packet is a single packet intended to be sent or
+// received on an IPv4 connection.
+type IPv4Packet []byte
+
+// Valid checks that various fields of the packet are
+// correct or within range.
+//
+// This does not verify the checksum.
+func (i IPv4Packet) Valid() bool {
+	if len(i) < 20 {
 		return false
 	}
-	if packet[0]>>4 != 4 {
+	if i[0]>>4 != 4 {
 		return false
 	}
-	size := int(packet[0]&0xf) * 4
-	if size < 20 || size > len(packet) {
+	size := int(i[0]&0xf) * 4
+	if size < 20 || size > len(i) {
 		return false
 	}
 	return true
 }
 
-// IPv4Header extracts the header from the IP packet.
+// Header extracts the header from the packet.
 //
 // The result is a slice into the packet.
 //
 // The packet is assumed to be valid.
-func IPv4Header(packet []byte) []byte {
-	size := int(packet[0]&0xf) * 4
-	return packet[:size]
+func (i IPv4Packet) Header() []byte {
+	size := int(i[0]&0xf) * 4
+	return i[:size]
 }
 
-// IPv4Payload extracts the payload from an IP packet.
+// Payload extracts the payload from a packet.
 //
 // The result is a slice into the packet.
 //
 // The packet is assumed to be valid.
-func IPv4Payload(packet []byte) []byte {
-	return packet[len(IPv4Header(packet)):]
+func (i IPv4Packet) Payload() []byte {
+	return i[len(i.Header()):]
 }
 
-// IPv4SourceAddr extracts the source address from the IP
+// SourceAddr extracts the source address from the packet.
+//
+// The result is a slice into the packet.
+//
+// The packet is assumed to be valid.
+func (i IPv4Packet) SourceAddr() net.IP {
+	return net.IP(i[12:16])
+}
+
+// DestAddr extracts the destination address from the
 // packet.
 //
 // The result is a slice into the packet.
 //
 // The packet is assumed to be valid.
-func IPv4SourceAddr(packet []byte) net.IP {
-	return packet[12:16]
+func (i IPv4Packet) DestAddr() net.IP {
+	return net.IP(i[16:20])
 }
 
-// IPv4DestAddr extracts the destination address from the
-// IP packet.
-//
-// The result is a slice into the packet.
-//
-// The packet is assumed to be valid.
-func IPv4DestAddr(packet []byte) net.IP {
-	return packet[16:20]
+// Proto extracts the protocol ID from the packet.
+func (i IPv4Packet) Proto() int {
+	return int(i[9])
 }
 
-// IPv4Proto extracts the protocol ID from the IP packet.
-func IPv4Proto(packet []byte) int {
-	return int(packet[9])
-}
-
-// IPv4Checksum computes the checksum of the data.
-//
-// For IPv4 packets, the data should be a header.
+// Checksum computes the checksum of the header.
 //
 // A checksum of 0 is expected.
-func IPv4Checksum(data []byte) uint16 {
-	// Adapted from C example in RFC 1071:
-	// https://tools.ietf.org/html/rfc1071.
-
-	var sum uint32
-
-	for len(data) >= 2 {
-		sum += (uint32(data[0]) << 8) | uint32(data[1])
-		data = data[2:]
-	}
-
-	if len(data) == 1 {
-		sum += uint32(data[0])
-	}
-
-	for (sum >> 16) != 0 {
-		sum = (sum & 0xffff) + (sum >> 16)
-	}
-
-	return ^uint16(sum)
-}
-
-// IPv4SetChecksum inserts the checksum into a packet's
-// header.
 //
 // The packet is assumed to be valid.
-func IPv4SetChecksum(packet []byte) {
-	header := IPv4Header(packet)
-	header[10] = 0
-	header[11] = 0
-	checksum := IPv4Checksum(header)
-	header[10] = byte(checksum >> 8)
-	header[11] = byte(checksum)
+func (i IPv4Packet) Checksum() uint16 {
+	return InternetChecksum(i.Header())
+}
+
+// SetChecksum inserts the correct checksum into the
+// packet's header.
+//
+// The packet is assumed to be valid.
+func (i IPv4Packet) SetChecksum() {
+	i[10] = 0
+	i[11] = 0
+	checksum := i.Checksum()
+	i[10] = byte(checksum >> 8)
+	i[11] = byte(checksum)
 }
 
 // Filter IPv4 packets that are valid.
 func FilterIPv4Valid(stream Stream) Stream {
 	return Filter(stream, func(packet []byte) []byte {
-		if IPv4Valid(packet) {
+		if IPv4Packet(packet).Valid() {
 			return packet
 		}
 		return nil
@@ -119,7 +106,7 @@ func FilterIPv4Valid(stream Stream) Stream {
 // All incoming packets are assumed to be valid.
 func FilterIPv4Checksums(stream Stream) Stream {
 	return Filter(stream, func(packet []byte) []byte {
-		if IPv4Checksum(IPv4Header(packet)) == 0 {
+		if IPv4Packet(packet).Checksum() == 0 {
 			return packet
 		}
 		return nil
@@ -131,7 +118,7 @@ func FilterIPv4Checksums(stream Stream) Stream {
 // All incoming packets are assumed to be valid.
 func FilterIPv4Proto(stream Stream, ipProto int) Stream {
 	return Filter(stream, func(packet []byte) []byte {
-		if IPv4Proto(packet) == ipProto {
+		if IPv4Packet(packet).Proto() == ipProto {
 			return packet
 		}
 		return nil
@@ -143,7 +130,7 @@ func FilterIPv4Proto(stream Stream, ipProto int) Stream {
 // All incoming packets are assumed to be valid.
 func FilterIPv4Dest(stream Stream, dest net.IP) Stream {
 	return Filter(stream, func(packet []byte) []byte {
-		if bytes.Equal(IPv4DestAddr(packet), dest[len(dest)-4:]) {
+		if bytes.Equal(IPv4Packet(packet).DestAddr(), dest[len(dest)-4:]) {
 			return packet
 		}
 		return nil
