@@ -199,11 +199,10 @@ func AddIPv4Identifiers(stream Stream) Stream {
 		id := curId
 		curId += 1
 		lock.Unlock()
-		dontFrag, moreFrags, offset := ipPacket.FragmentInfo()
+		_, moreFrags, offset := ipPacket.FragmentInfo()
 		if moreFrags || offset != 0 {
 			return nil
 		}
-		ipPacket.SetFragmentInfo(dontFrag, false, 0)
 		ipPacket.SetIdentification(id)
 		ipPacket.SetChecksum()
 		return packet
