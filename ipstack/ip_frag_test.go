@@ -14,6 +14,8 @@ func TestFragmentation(t *testing.T) {
 	sender, receiver := Pipe(1000, 1000)
 	sender = &randomLatencyStream{Stream: sender}
 	sender = AddIPv4Identifiers(FragmentOutgoingIPv4(sender, 133))
+	receiver = FilterIPv4Valid(receiver)
+	receiver = FilterIPv4Checksums(receiver)
 	receiver = DefragmentIncomingIPv4(receiver, time.Second*3)
 
 	packets := make([][]byte, 30)
