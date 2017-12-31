@@ -15,12 +15,10 @@ func NewIPv4Packet(ttl, proto int, source, dest net.IP, payload []byte) IPv4Pack
 	res := make(IPv4Packet, 20+len(payload))
 	res[0] = 0x45
 
-	totalLen := uint16(len(payload) + 20)
-	res[2] = byte(totalLen >> 8)
-	res[3] = byte(totalLen)
-
+	res.SetTotalLength()
 	res.SetTTL(ttl)
 	res.SetProto(proto)
+	res.SetChecksum()
 
 	return res
 }
@@ -36,11 +34,12 @@ func (i IPv4Packet) Valid() bool {
 	if i[0]>>4 != 4 {
 		return false
 	}
-	size := int(i[0]&0xf) * 4
-	if size < 20 || size > len(i) {
+	headerSize := int(i[0]&0xf) * 4
+	if headerSize < 20 || headerSize > len(i) {
 		return false
 	}
-	return true
+	totalLength := (int(i[2]) << 8) | int(i[3])
+	return totalLength == len(i)
 }
 
 // Header extracts the header from the packet.
@@ -163,6 +162,14 @@ func (i IPv4Packet) SetFragmentInfo(dontFrag, moreFrags bool, fragOffset int) {
 	}
 	i[6] |= uint8(fragOffset>>8) & 0x1f
 	i[7] |= uint8(fragOffset)
+}
+
+// SetTotalLength sets the total length field to reflect
+// the actual length of the packet.
+func (i IPv4Packet) SetTotalLength() {
+	size := uint16(len(i))
+	i[2] = byte(size >> 8)
+	i[3] = byte(size)
 }
 
 // FilterIPv4Valid filters packets that are valid.

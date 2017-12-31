@@ -83,6 +83,7 @@ func (i *ipv4Fragmenter) Write(packet []byte) error {
 		chunkSize := essentials.MinInt(maxPayload, len(payload)-offset)
 		next := append(append(IPv4Packet{}, header...), payload[offset:offset+chunkSize]...)
 		next.SetFragmentInfo(false, chunkSize+offset < len(payload), offset>>3)
+		next.SetTotalLength()
 		next.SetChecksum()
 		if err := i.Stream.Write(next); err != nil {
 			return err
@@ -196,6 +197,7 @@ func (i *ipv4Reconstruction) Reassemble() IPv4Packet {
 		packet = append(packet, frag.Payload()...)
 	}
 	packet.SetFragmentInfo(false, false, 0)
+	packet.SetTotalLength()
 	packet.SetChecksum()
 	return packet
 }
