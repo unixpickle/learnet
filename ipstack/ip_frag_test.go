@@ -11,8 +11,8 @@ import (
 )
 
 func TestFragmentation(t *testing.T) {
-	sender, receiver := Pipe(1000, 1000)
-	sender = &randomLatencyStream{Stream: sender}
+	sender, receiver := Pipe(0)
+	sender = newRandomLatencyStream(sender)
 	sender = AddIPv4Identifiers(FragmentOutgoingIPv4(sender, 133))
 	receiver = FilterIPv4Valid(receiver)
 	receiver = FilterIPv4Checksums(receiver)
@@ -26,7 +26,7 @@ func TestFragmentation(t *testing.T) {
 		}
 		packets[i] = NewIPv4Packet(rand.Intn(30)+1, ProtocolNumberICMP, net.IP{10, 0, 0, 1},
 			net.IP{10, 0, 0, 2}, payload)
-		if err := sender.Write(packets[i]); err != nil {
+		if err := Send(sender, packets[i]); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -52,12 +52,29 @@ IncomingLoop:
 
 type randomLatencyStream struct {
 	Stream
+	outgoing chan []byte
 }
 
-func (r *randomLatencyStream) Write(packet []byte) error {
-	go func() {
-		time.Sleep(time.Millisecond * time.Duration(rand.Intn(300)))
-		r.Stream.Write(packet)
-	}()
-	return nil
+func newRandomLatencyStream(s Stream) Stream {
+	res := &randomLatencyStream{Stream: s, outgoing: make(chan []byte)}
+	go res.forwardLoop()
+	return res
+}
+
+func (r *randomLatencyStream) Outgoing() chan<- []byte {
+	return r.outgoing
+}
+
+func (r *randomLatencyStream) forwardLoop() {
+	for {
+		select {
+		case packet := <-r.outgoing:
+			go func() {
+				time.Sleep(time.Millisecond * time.Duration(rand.Intn(300)))
+				Send(r.Stream, packet)
+			}()
+		case <-r.Stream.Done():
+			return
+		}
+	}
 }

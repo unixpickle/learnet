@@ -2,7 +2,6 @@ package ipstack
 
 import (
 	"bytes"
-	"errors"
 	"net"
 	"sort"
 	"time"
@@ -48,17 +47,39 @@ func DefragmentIncomingIPv4(stream Stream, timeout time.Duration) Stream {
 //
 // All outgoing packets are assumed to be valid.
 func FragmentOutgoingIPv4(stream Stream, mtu int) Stream {
-	return &ipv4Fragmenter{Stream: stream, MTU: mtu}
+	res := &ipv4Fragmenter{Stream: stream, mtu: mtu, outgoing: make(chan []byte)}
+	go res.forwardLoop()
+	return res
 }
 
 type ipv4Fragmenter struct {
 	Stream
-	MTU int
+	mtu      int
+	outgoing chan []byte
 }
 
-func (i *ipv4Fragmenter) Write(packet []byte) error {
-	if len(packet) < i.MTU {
-		return i.Stream.Write(packet)
+func (i *ipv4Fragmenter) Outgoing() chan<- []byte {
+	return i.outgoing
+}
+
+func (i *ipv4Fragmenter) forwardLoop() {
+	for {
+		select {
+		case packet := <-i.outgoing:
+			for _, fragment := range i.fragments(packet) {
+				if Send(i.Stream, fragment) != nil {
+					return
+				}
+			}
+		case <-i.Stream.Done():
+			return
+		}
+	}
+}
+
+func (i *ipv4Fragmenter) fragments(packet IPv4Packet) []IPv4Packet {
+	if len(packet) < i.mtu {
+		return []IPv4Packet{packet}
 	}
 	ipPacket := IPv4Packet(packet)
 	header := ipPacket.Header()
@@ -66,32 +87,30 @@ func (i *ipv4Fragmenter) Write(packet []byte) error {
 
 	dontFrag, more, existingOffset := ipPacket.FragmentInfo()
 	if dontFrag {
-		return errors.New("write: packet cannot be fragmented")
+		return nil
 	} else if more || existingOffset != 0 {
-		return errors.New("write: packet is already fragmented")
+		return nil
 	}
 
-	maxPayload := i.MTU - len(header)
+	maxPayload := i.mtu - len(header)
 	maxPayload ^= maxPayload & 7
 
 	if maxPayload == 0 {
-		return errors.New("write: no room for payload")
+		return nil
 	}
 
-	offset := 0
+	var packets []IPv4Packet
+	var offset int
 	for len(payload)-offset > 0 {
 		chunkSize := essentials.MinInt(maxPayload, len(payload)-offset)
 		next := append(append(IPv4Packet{}, header...), payload[offset:offset+chunkSize]...)
 		next.SetFragmentInfo(false, chunkSize+offset < len(payload), offset>>3)
 		next.SetTotalLength()
 		next.SetChecksum()
-		if err := i.Stream.Write(next); err != nil {
-			return err
-		}
+		packets = append(packets, next)
 		offset += chunkSize
 	}
-
-	return nil
+	return packets
 }
 
 // A ipv4Defragmenter tracks the states of packet

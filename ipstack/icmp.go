@@ -75,6 +75,6 @@ func RespondToPingsIPv4(stream Stream) {
 		copy(ipPacket.DestAddr(), source)
 		ipPacket.SetChecksum()
 
-		stream.Write(ipPacket)
+		Send(stream, ipPacket)
 	}
 }

@@ -10,8 +10,8 @@ type FilterFunc func(packet []byte) []byte
 
 type filterStream struct {
 	Stream
-	incoming       <-chan []byte
-	outgoingFilter FilterFunc
+	incoming <-chan []byte
+	outgoing chan<- []byte
 }
 
 // Filter wraps a Stream and uses the functions to process
@@ -21,24 +21,18 @@ type filterStream struct {
 // Rather, all operations should be performed on the
 // filtered stream.
 func Filter(s Stream, incoming, outgoing FilterFunc) Stream {
-	res := &filterStream{Stream: s, incoming: s.Incoming(), outgoingFilter: outgoing}
+	res := &filterStream{Stream: s, incoming: s.Incoming(), outgoing: s.Outgoing()}
 
 	if incoming != nil {
 		ch := make(chan []byte)
-		go func() {
-			defer close(ch)
-			for packet := range s.Incoming() {
-				packet = incoming(packet)
-				if packet != nil {
-					select {
-					case ch <- packet:
-					case <-s.Done():
-						return
-					}
-				}
-			}
-		}()
+		go filterChan(incoming, ch, s.Incoming(), true, s.Done())
 		res.incoming = ch
+	}
+
+	if outgoing != nil {
+		ch := make(chan []byte)
+		go filterChan(outgoing, s.Outgoing(), ch, false, s.Done())
+		res.outgoing = ch
 	}
 
 	return res
@@ -48,12 +42,32 @@ func (f *filterStream) Incoming() <-chan []byte {
 	return f.incoming
 }
 
-func (f *filterStream) Write(buf []byte) error {
-	if f.outgoingFilter != nil {
-		buf = f.outgoingFilter(buf)
-		if buf == nil {
-			return nil
+func (f *filterStream) Outgoing() chan<- []byte {
+	return f.outgoing
+}
+
+func filterChan(filter FilterFunc, dst chan<- []byte, src <-chan []byte, closeDst bool,
+	done <-chan struct{}) {
+	if closeDst {
+		defer close(dst)
+	}
+	for {
+		select {
+		case packet, ok := <-src:
+			if !ok {
+				return
+			}
+			packet = filter(packet)
+			if packet == nil {
+				continue
+			}
+			select {
+			case dst <- packet:
+			case <-done:
+				return
+			}
+		case <-done:
+			return
 		}
 	}
-	return f.Stream.Write(buf)
 }

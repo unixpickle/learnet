@@ -8,9 +8,8 @@ import (
 )
 
 var (
-	AlreadyClosedErr   = errors.New("close: stream is closed")
-	WriteBufferFullErr = errors.New("write: buffer is full")
-	WriteClosedErr     = errors.New("write: stream is closed")
+	AlreadyClosedErr = errors.New("close: stream is closed")
+	WriteClosedErr   = errors.New("write: stream is closed")
 )
 
 const DefaultBufferSize = 100
@@ -34,12 +33,20 @@ type Stream interface {
 	// Received buffers belong to the receiver.
 	Incoming() <-chan []byte
 
-	// Write sends a packet to the Stream in a non-blocking
-	// manner.
+	// Outgoing returns the channel to which outgoing packets
+	// can be sent.
 	//
-	// After sending a buffer, the buffer belongs to the
-	// Stream, even if the write fails.
-	Write([]byte) error
+	// Outgoing writes may block due to backpressure from the
+	// network stack or the actual network hardware.
+	// Also, outgoing writes may block forever once the
+	// Stream has been closed.
+	// Thus, it is important to select on both the Outgoing()
+	// channel and the Done() channel.
+	//
+	// Sent buffers belong to the Stream.
+	//
+	// This channel should never be closed.
+	Outgoing() chan<- []byte
 
 	// Close shuts down the Stream.
 	Close() error
@@ -47,6 +54,22 @@ type Stream interface {
 	// Done returns a channel which is closed automatically
 	// when the Stream is closed or disconnected.
 	Done() <-chan struct{}
+}
+
+// Send writes a packet to the stream or returns with an
+// error if the stream is closed.
+func Send(s Stream, data []byte) error {
+	select {
+	case <-s.Done():
+		return WriteClosedErr
+	default:
+	}
+	select {
+	case s.Outgoing() <- data:
+	case <-s.Done():
+		return WriteClosedErr
+	}
+	return nil
 }
 
 // A MultiStream multiplexes an underlying stream.
@@ -76,19 +99,35 @@ type pipeStream struct {
 
 // Pipe creates two connected Streams.
 //
-// The rightBuffer determines the buffer size when writing
-// to s1, whereas the leftBuffer determines the buffer
-// size when writing to s2.
-func Pipe(rightBuffer, leftBuffer int) (s1, s2 Stream) {
-	right := make(chan []byte, rightBuffer)
-	left := make(chan []byte, leftBuffer)
+// Each stream applies backpressure on the other.
+// If you don't read from one stream for a while, then
+// writes to the other stream will block.
+// However, you may specify a buffer size, in which case
+// at least bufferSize writes will be buffered.
+func Pipe(bufferSize int) (Stream, Stream) {
+	right := make(chan []byte, bufferSize)
+	left := make(chan []byte, bufferSize)
 	done := make(chan struct{})
 	lock := &sync.Mutex{}
 
-	pipe1 := &pipeStream{pairLock: lock, incoming: left, outgoing: right, done: done}
-	pipe2 := &pipeStream{pairLock: lock, incoming: right, outgoing: left, done: done}
+	pipe1 := &pipeStream{
+		pairLock: lock,
+		incoming: make(chan []byte),
+		outgoing: make(chan []byte),
+		done:     done,
+	}
+	pipe2 := &pipeStream{
+		pairLock: lock,
+		incoming: make(chan []byte),
+		outgoing: make(chan []byte),
+		done:     done,
+	}
 	pipe1.other = pipe2
 	pipe2.other = pipe1
+	go forwardPackets(pipe1.incoming, left, true, done)
+	go forwardPackets(pipe2.incoming, right, true, done)
+	go forwardPackets(right, pipe1.outgoing, false, done)
+	go forwardPackets(left, pipe2.outgoing, false, done)
 
 	return pipe1, pipe2
 }
@@ -97,20 +136,8 @@ func (p *pipeStream) Incoming() <-chan []byte {
 	return p.incoming
 }
 
-func (p *pipeStream) Write(packet []byte) error {
-	p.pairLock.Lock()
-	defer p.pairLock.Unlock()
-
-	if p.closed || p.other.closed {
-		return WriteClosedErr
-	}
-
-	select {
-	case p.outgoing <- packet:
-		return nil
-	default:
-		return WriteBufferFullErr
-	}
+func (p *pipeStream) Outgoing() chan<- []byte {
+	return p.outgoing
 }
 
 func (p *pipeStream) Close() error {
@@ -123,8 +150,6 @@ func (p *pipeStream) Close() error {
 	p.closed = true
 	if !p.other.closed {
 		close(p.done)
-		close(p.incoming)
-		close(p.outgoing)
 	}
 	return nil
 }
@@ -154,8 +179,10 @@ func (m *multiplexer) Fork(readBuffer int) (Stream, error) {
 	child := &childStream{
 		parent:   m,
 		incoming: make(chan []byte, readBuffer),
+		outgoing: make(chan []byte),
 		done:     make(chan struct{}),
 	}
+	go forwardPackets(m.stream.Outgoing(), child.outgoing, false, child.done, m.closeChan)
 
 	m.lock.Lock()
 	defer m.lock.Unlock()
@@ -229,24 +256,6 @@ func (m *multiplexer) closed() bool {
 	}
 }
 
-func (m *multiplexer) childWrite(child *childStream, data []byte) error {
-	m.lock.Lock()
-	defer m.lock.Unlock()
-
-	if m.closed() {
-		return AlreadyClosedErr
-	}
-
-	// Make sure the child isn't closed.
-	for _, ch := range m.children {
-		if ch == child {
-			return m.stream.Write(data)
-		}
-	}
-
-	return WriteClosedErr
-}
-
 func (m *multiplexer) childClose(child *childStream) error {
 	m.lock.Lock()
 	defer m.lock.Unlock()
@@ -266,6 +275,7 @@ func (m *multiplexer) childClose(child *childStream) error {
 type childStream struct {
 	parent   *multiplexer
 	incoming chan []byte
+	outgoing chan []byte
 	done     chan struct{}
 }
 
@@ -273,8 +283,8 @@ func (c *childStream) Incoming() <-chan []byte {
 	return c.incoming
 }
 
-func (c *childStream) Write(data []byte) error {
-	return c.parent.childWrite(c, data)
+func (c *childStream) Outgoing() chan<- []byte {
+	return c.outgoing
 }
 
 func (c *childStream) Close() error {

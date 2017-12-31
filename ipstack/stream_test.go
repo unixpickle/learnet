@@ -8,7 +8,7 @@ import (
 )
 
 func TestMultiplexerBasic(t *testing.T) {
-	parent, pipe := Pipe(10, 10)
+	parent, pipe := Pipe(10)
 	multi := Multiplex(parent)
 	defer multi.Close()
 
@@ -21,18 +21,18 @@ func TestMultiplexerBasic(t *testing.T) {
 		t.Error(err)
 	}
 
-	stream1.Write([]byte("test"))
+	Send(stream1, []byte("test"))
 	if !bytes.Equal(<-pipe.Incoming(), []byte("test")) {
 		t.Error("unexpected packet")
 	}
 
-	stream2.Write([]byte("toast"))
+	Send(stream1, []byte("toast"))
 	if !bytes.Equal(<-pipe.Incoming(), []byte("toast")) {
 		t.Error("unexpected packet")
 	}
 
-	pipe.Write([]byte("foo"))
-	pipe.Write([]byte("bar"))
+	Send(pipe, []byte("foo"))
+	Send(pipe, []byte("bar"))
 
 	for _, child := range []Stream{stream1, stream2} {
 		for _, data := range [][]byte{[]byte("foo"), []byte("bar")} {
@@ -44,7 +44,7 @@ func TestMultiplexerBasic(t *testing.T) {
 }
 
 func TestMultiplexerClose(t *testing.T) {
-	parent, _ := Pipe(10, 10)
+	parent, _ := Pipe(10)
 	multi := Multiplex(parent)
 	defer multi.Close()
 
@@ -68,7 +68,7 @@ func TestMultiplexerClose(t *testing.T) {
 }
 
 func TestMultiplexerParentClose(t *testing.T) {
-	parent, pipe := Pipe(10, 10)
+	parent, pipe := Pipe(10)
 	multi := Multiplex(parent)
 	defer multi.Close()
 
@@ -100,7 +100,7 @@ func TestMultiplexerCloseMultiFlood(t *testing.T) {
 }
 
 func testMultiplexerCloseFlood(t *testing.T, closePipe bool) {
-	parent, pipe := Pipe(10, 10)
+	parent, pipe := Pipe(10)
 	multi := Multiplex(parent)
 	defer multi.Close()
 
@@ -115,11 +115,8 @@ func testMultiplexerCloseFlood(t *testing.T, closePipe bool) {
 		go func() {
 			defer wg.Done()
 			for {
-				pipe.Write([]byte("hi"))
-				select {
-				case <-pipe.Done():
+				if Send(pipe, []byte("hi")) != nil {
 					return
-				default:
 				}
 			}
 		}()

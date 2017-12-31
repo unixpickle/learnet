@@ -32,21 +32,8 @@ func (t *tunnelStream) Incoming() <-chan []byte {
 	return t.incoming
 }
 
-func (t *tunnelStream) Write(packet []byte) error {
-	select {
-	case <-t.done:
-		return ipstack.WriteClosedErr
-	default:
-	}
-
-	select {
-	case t.outgoing <- packet:
-		return nil
-	case <-t.done:
-		return ipstack.WriteClosedErr
-	default:
-		return ipstack.WriteBufferFullErr
-	}
+func (t *tunnelStream) Outgoing() chan<- []byte {
+	return t.outgoing
 }
 
 func (t *tunnelStream) Close() error {
