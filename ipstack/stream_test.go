@@ -91,6 +91,39 @@ func TestMultiplexerParentClose(t *testing.T) {
 	<-stream2.Incoming()
 }
 
+func TestMultiplexerWritePressure(t *testing.T) {
+	parent, pipe := Pipe(10)
+	multi := Multiplex(parent)
+	defer multi.Close()
+
+	child, err := multi.Fork(10)
+	if err != nil {
+		t.Error(err)
+	}
+
+	// Each child stream can buffer one packet.
+	// The pipe channel can buffer 10 packets, plus 2 that it
+	// can store in memory as it forwards between channels.
+
+	for i := 0; i < 13; i++ {
+		child.Outgoing() <- []byte("in a buffer")
+	}
+
+	select {
+	case child.Outgoing() <- []byte("cannot buffer"):
+		t.Error("backpressure expected")
+	case <-time.After(time.Second / 5):
+	}
+
+	<-pipe.Incoming()
+
+	select {
+	case child.Outgoing() <- []byte("foo"):
+	case <-time.After(time.Second / 5):
+		t.Error("backpressure not expected")
+	}
+}
+
 func TestMultiplexerClosePipeFlood(t *testing.T) {
 	testMultiplexerCloseFlood(t, true)
 }
@@ -122,6 +155,16 @@ func testMultiplexerCloseFlood(t *testing.T, closePipe bool) {
 		}()
 	}
 
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			if Send(child, []byte("hello!")) != nil {
+				return
+			}
+		}
+	}()
+
 	// Make sure messages are flooding in.
 	for i := 0; i < 100; i++ {
 		<-child.Incoming()
@@ -135,9 +178,9 @@ func testMultiplexerCloseFlood(t *testing.T, closePipe bool) {
 		multi.Close()
 	}
 
+	<-child.Done()
 	for _ = range child.Incoming() {
 	}
-	<-child.Done()
 
 	wg.Wait()
 }
