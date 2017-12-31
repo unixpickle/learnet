@@ -143,8 +143,8 @@ func (i IPv4Packet) SetIdentification(id uint16) {
 //
 // The packet is assumed to be valid.
 func (i IPv4Packet) FragmentInfo() (dontFrag, moreFrags bool, fragOffset int) {
-	dontFrag = (i[6] & 0x80) != 0
-	moreFrags = (i[6] & 0x40) != 0
+	dontFrag = (i[6] & 0x40) != 0
+	moreFrags = (i[6] & 0x20) != 0
 	fragOffset = (int(i[6]&0x1f) << 8) | int(i[7])
 	return
 }
@@ -156,10 +156,10 @@ func (i IPv4Packet) SetFragmentInfo(dontFrag, moreFrags bool, fragOffset int) {
 	i[6] = 0
 	i[7] = 0
 	if dontFrag {
-		i[6] |= 0x80
+		i[6] |= 0x40
 	}
 	if moreFrags {
-		i[6] |= 0x40
+		i[6] |= 0x20
 	}
 	i[6] |= uint8(fragOffset>>8) & 0x1f
 	i[7] |= uint8(fragOffset)
