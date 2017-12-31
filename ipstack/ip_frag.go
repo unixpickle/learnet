@@ -152,7 +152,7 @@ func (i *ipv4Reconstruction) AddFragment(p IPv4Packet) {
 	_, _, off := p.FragmentInfo()
 	idx := sort.Search(len(i.Fragments), func(idx int) bool {
 		_, _, off1 := i.Fragments[idx].FragmentInfo()
-		return off >= off1
+		return off < off1
 	})
 	if idx == len(i.Fragments) {
 		i.Fragments = append(i.Fragments, p)
@@ -178,10 +178,10 @@ func (i *ipv4Reconstruction) Ready() bool {
 	nextOff := 0
 	for _, frag := range i.Fragments {
 		_, _, off := frag.FragmentInfo()
-		if off != nextOff {
+		if off<<3 != nextOff {
 			return false
 		}
-		nextOff = off + len(frag.Payload())
+		nextOff += len(frag.Payload())
 	}
 
 	return true
@@ -195,5 +195,7 @@ func (i *ipv4Reconstruction) Reassemble() IPv4Packet {
 	for _, frag := range i.Fragments {
 		packet = append(packet, frag.Payload()...)
 	}
+	packet.SetFragmentInfo(false, false, 0)
+	packet.SetChecksum()
 	return packet
 }
