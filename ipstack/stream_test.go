@@ -14,11 +14,11 @@ func TestMultiplexerBasic(t *testing.T) {
 
 	stream1, err := multi.Fork(10)
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 	stream2, err := multi.Fork(10)
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 
 	Send(stream1, []byte("test"))
@@ -50,12 +50,12 @@ func TestMultiplexerClose(t *testing.T) {
 
 	stream1, err := multi.Fork(10)
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 
 	stream2, err := multi.Fork(10)
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 
 	multi.Close()
@@ -74,12 +74,12 @@ func TestMultiplexerParentClose(t *testing.T) {
 
 	stream1, err := multi.Fork(10)
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 
 	stream2, err := multi.Fork(10)
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 
 	pipe.Close()
@@ -98,7 +98,7 @@ func TestMultiplexerWritePressure(t *testing.T) {
 
 	child, err := multi.Fork(10)
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 
 	// Each child stream can buffer one packet.
@@ -139,7 +139,7 @@ func testMultiplexerCloseFlood(t *testing.T, closePipe bool) {
 
 	child, err := multi.Fork(10)
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
 
 	var wg sync.WaitGroup
