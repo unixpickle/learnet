@@ -18,6 +18,8 @@ func NewIPv4Packet(ttl, proto int, source, dest net.IP, payload []byte) IPv4Pack
 	res.SetTotalLength()
 	res.SetTTL(ttl)
 	res.SetProto(proto)
+	res.SetSourceAddr(source)
+	res.SetDestAddr(dest)
 	res.SetChecksum()
 
 	return res
@@ -70,6 +72,13 @@ func (i IPv4Packet) SourceAddr() net.IP {
 	return net.IP(i[12:16])
 }
 
+// SetSourceAddr sets the source address field.
+//
+// The packet is assumed to be valid.
+func (i IPv4Packet) SetSourceAddr(ip net.IP) {
+	copy(i[12:16], ip.To4())
+}
+
 // DestAddr extracts the destination address from the
 // packet.
 //
@@ -78,6 +87,13 @@ func (i IPv4Packet) SourceAddr() net.IP {
 // The packet is assumed to be valid.
 func (i IPv4Packet) DestAddr() net.IP {
 	return net.IP(i[16:20])
+}
+
+// SetDestAddr sets the destination address field.
+//
+// The packet is assumed to be valid.
+func (i IPv4Packet) SetDestAddr(ip net.IP) {
+	copy(i[16:20], ip.To4())
 }
 
 // TTL extracts the time to live field from the packet.
@@ -213,7 +229,7 @@ func FilterIPv4Proto(stream Stream, ipProto int) Stream {
 // All incoming packets are assumed to be valid.
 func FilterIPv4Dest(stream Stream, dest net.IP) Stream {
 	return Filter(stream, func(packet []byte) []byte {
-		if bytes.Equal(IPv4Packet(packet).DestAddr(), dest[len(dest)-4:]) {
+		if bytes.Equal(IPv4Packet(packet).DestAddr(), dest.To4()) {
 			return packet
 		}
 		return nil
