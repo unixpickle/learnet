@@ -19,7 +19,11 @@ import (
 var routeLock sync.Mutex
 
 // AddRoute adds an entry to the system routing table.
-func AddRoute(destination, gateway net.IP, mask net.IPMask) error {
+func AddRoute(destination, gateway net.IP, mask net.IPMask) (err error) {
+	defer essentials.AddCtxTo("add route", &err)
+	if destination.To4() == nil || gateway.To4() == nil || len(mask) != 4 {
+		return errors.New("only IPv4 is supported")
+	}
 	header := &routeMsgHeader{
 		Type:  routeMsgTypeAdd,
 		Addrs: routeMsgAddrDst | routeMsgAddrGateway | routeMsgAddrNetmask,
@@ -28,7 +32,7 @@ func AddRoute(destination, gateway net.IP, mask net.IPMask) error {
 	for _, ip := range [][]byte{destination, gateway, mask} {
 		body.Write(packSockaddr4(ip, 0))
 	}
-	return essentials.AddCtx("add route", runRouteMsg(header, body.Bytes()))
+	return runRouteMsg(header, body.Bytes())
 }
 
 func runRouteMsg(header *routeMsgHeader, body []byte) error {

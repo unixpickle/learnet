@@ -5,6 +5,7 @@ package tunnet
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"net"
 	"os"
 	"sync"
@@ -141,6 +142,10 @@ func (u *utunSocket) Addresses() (local, dest net.IP, mask net.IPMask, err error
 
 func (u *utunSocket) SetAddresses(local, dest net.IP, mask net.IPMask) (err error) {
 	defer essentials.AddCtxTo("set addresses", &err)
+
+	if local.To4() == nil || dest.To4() == nil || len(mask) != 4 {
+		return errors.New("only IPv4 is supported")
+	}
 
 	u.ifreqIOCTL(ioctlSIOCDIFADDR, make([]byte, 16*3))
 
