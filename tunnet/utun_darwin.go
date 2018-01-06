@@ -125,9 +125,7 @@ func (u *utunSocket) SetMTU(mtu int) (err error) {
 func (u *utunSocket) Addresses() (local, dest net.IP, mask net.IPMask, err error) {
 	defer essentials.AddCtxTo("get addresses", &err)
 
-	sockaddrOut := make([]byte, 16)
-	sockaddrOut[0] = 16
-	sockaddrOut[1] = unix.AF_INET
+	sockaddrOut := packSockaddr4(net.IPv4zero, 0)
 
 	ips := []net.IP{}
 	ioctls := []int{ioctlSIOCGIFADDR, ioctlSIOCGIFDSTADDR, ioctlSIOCGIFNETMASK}
@@ -135,7 +133,8 @@ func (u *utunSocket) Addresses() (local, dest net.IP, mask net.IPMask, err error
 		if err := u.ifreqIOCTL(ioctl, sockaddrOut); err != nil {
 			return nil, nil, nil, err
 		}
-		ips = append(ips, net.IP(append([]byte{}, sockaddrOut[4:8]...)))
+		ip, _ := unpackSockaddr4(sockaddrOut)
+		ips = append(ips, ip)
 	}
 	return ips[0], ips[1], net.IPMask(ips[2]), nil
 }
@@ -145,16 +144,11 @@ func (u *utunSocket) SetAddresses(local, dest net.IP, mask net.IPMask) (err erro
 
 	u.ifreqIOCTL(ioctlSIOCDIFADDR, make([]byte, 16*3))
 
-	sockaddr := make([]byte, 16*3)
-	ips := [][]byte{local, dest, mask}
-	for i, ip := range ips {
-		sockaddr[i*16] = 16
-		if i != 2 {
-			sockaddr[i*16+1] = unix.AF_INET
-		}
-		copy(sockaddr[i*16+4:i*16+8], ip[len(ip)-4:])
+	var sockaddrs bytes.Buffer
+	for _, ip := range []net.IP{local, dest, net.IP(mask)} {
+		sockaddrs.Write(packSockaddr4(ip, 0))
 	}
-	if err := u.ifreqIOCTL(ioctlSIOCAIFADDR, sockaddr); err != nil {
+	if err := u.ifreqIOCTL(ioctlSIOCAIFADDR, sockaddrs.Bytes()); err != nil {
 		return err
 	}
 	return nil

@@ -24,14 +24,11 @@ func AddRoute(destination, gateway net.IP, mask net.IPMask) error {
 		Type:  routeMsgTypeAdd,
 		Addrs: routeMsgAddrDst | routeMsgAddrGateway | routeMsgAddrNetmask,
 	}
-	// TODO: generic API for packing sockaddr.
-	body := make([]byte, 16*3)
-	for i, ip := range [][]byte{destination, gateway, mask} {
-		body[i*16] = 16
-		body[i*16+1] = unix.AF_INET
-		copy(body[i*16+4:i*16+8], ip[len(ip)-4:])
+	var body bytes.Buffer
+	for _, ip := range [][]byte{destination, gateway, mask} {
+		body.Write(packSockaddr4(ip, 0))
 	}
-	return essentials.AddCtx("add route", runRouteMsg(header, body))
+	return essentials.AddCtx("add route", runRouteMsg(header, body.Bytes()))
 }
 
 func runRouteMsg(header *routeMsgHeader, body []byte) error {
