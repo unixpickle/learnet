@@ -1,5 +1,5 @@
 // Package tunnet provides a high-level API for creating
-// tunnel network interfaces.
+// and using tunnel network interfaces.
 package tunnet
 
 import "net"

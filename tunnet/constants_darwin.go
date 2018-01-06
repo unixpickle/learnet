@@ -3,6 +3,7 @@ package tunnet
 import "encoding/binary"
 
 const (
+	pfRoute             = 17
 	pfSystem            = 32
 	sysprotoControl     = 2
 	afSysControl        = 2
