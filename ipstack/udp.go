@@ -2,6 +2,8 @@ package ipstack
 
 import "net"
 
+const ProtocolNumberUDP = 17
+
 // A UDPPacket is a UDP payload contained in an IP packet.
 type UDPPacket interface {
 	// Valid verifies various fields of the packet.
@@ -23,7 +25,7 @@ type UDPPacket interface {
 
 	// UseChecksum checks if the packet has checksums
 	// disabled.
-	// If true, Checksum() needn't be checked.
+	// If false, Checksum() needn't be checked.
 	UseChecksum() bool
 
 	// Checksum computes the packet's checksum.
@@ -137,4 +139,40 @@ func (u UDP4Packet) Payload() []byte {
 	return IPv4Packet(u).Payload()[8:]
 }
 
-// TODO: implement checksums.
+// UseChecksum checks if the packet has checksums
+// disabled.
+// If false, Checksum() needn't be checked.
+//
+// This assumes that the packet is valid.
+func (u UDP4Packet) UseChecksum() bool {
+	return u.Header().Checksum() != 0
+}
+
+// Checksum computes the packet's checksum.
+// Zero means the checksum is correct.
+//
+// This assumes that the packet is valid.
+func (u UDP4Packet) Checksum() uint16 {
+	udpLen := len(IPv4Packet(u).Payload())
+	pseudoPacket := make([]byte, 12+udpLen)
+	copy(pseudoPacket, IPv4Packet(u).SourceAddr())
+	copy(pseudoPacket[4:], IPv4Packet(u).SourceAddr())
+	pseudoPacket[9] = ProtocolNumberUDP
+	pseudoPacket[10] = byte(udpLen >> 8)
+	pseudoPacket[11] = byte(udpLen)
+	copy(pseudoPacket[12:], IPv4Packet(u).Payload())
+	return InternetChecksum(pseudoPacket)
+}
+
+// SetChecksum computes the correct checksum and inserts
+// it into the packet.
+//
+// This assumes that the packet is valid.
+func (u UDP4Packet) SetChecksum() {
+	u.Header().SetChecksum(0)
+	sum := u.Checksum()
+	if sum == 0 {
+		sum = 0xffff
+	}
+	u.Header().SetChecksum(sum)
+}
