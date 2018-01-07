@@ -10,6 +10,7 @@ import (
 type PortAllocator interface {
 	// Exclusive use of a port.
 	// Useful for incoming connections.
+	AllocAny() (int, error)
 	Alloc(port int) error
 	Free(port int) error
 
@@ -28,6 +29,18 @@ func BasicPortAllocator() PortAllocator {
 type basicPortAllocator struct {
 	Lock sync.Mutex
 	Used [0x10000]bool
+}
+
+func (b *basicPortAllocator) AllocAny() (int, error) {
+	b.Lock.Lock()
+	defer b.Lock.Unlock()
+	for i := 0xffff; i >= 0; i-- {
+		if !b.Used[i] {
+			b.Used[i] = true
+			return i, nil
+		}
+	}
+	return 0, errors.New("alloc port: no free ports")
 }
 
 func (b *basicPortAllocator) Alloc(port int) error {
@@ -57,15 +70,7 @@ func (b *basicPortAllocator) Free(port int) error {
 }
 
 func (b *basicPortAllocator) AllocRemote(remote net.Addr) (int, error) {
-	b.Lock.Lock()
-	defer b.Lock.Unlock()
-	for i := 0xffff; i >= 0; i-- {
-		if !b.Used[i] {
-			b.Used[i] = true
-			return i, nil
-		}
-	}
-	return 0, errors.New("alloc port: no free ports")
+	return b.AllocAny()
 }
 
 func (b *basicPortAllocator) FreeRemote(remote net.Addr, port int) error {

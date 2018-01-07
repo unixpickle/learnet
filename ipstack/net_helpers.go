@@ -2,60 +2,66 @@ package ipstack
 
 import (
 	"errors"
-	"net"
 	"sync"
 	"time"
 )
 
 var (
 	readTimeoutErr  = &timeoutError{Context: "read"}
-	writeTimeoutErr = &timeoutError{Context: "read"}
+	writeTimeoutErr = &timeoutError{Context: "write"}
 )
 
-// streamConn is a net.Conn that transfers packets to and
-// from a Stream.
+// streamConn is a helper for making net.Conns that
+// transfer packets on a Stream.
 type streamConn struct {
 	stream        Stream
-	localAddr     net.Addr
-	remoteAddr    net.Addr
 	readDeadline  *deadlineManager
 	writeDeadline *deadlineManager
 }
 
-func (s *streamConn) Read(b []byte) (n int, err error) {
-	packet, err := s.readPacket()
-	if err != nil {
-		return 0, nil
+func newStreamConn(stream Stream) *streamConn {
+	return &streamConn{
+		stream:        stream,
+		readDeadline:  newDeadlineManager(),
+		writeDeadline: newDeadlineManager(),
 	}
-	return copy(b, packet), nil
 }
 
-func (s *streamConn) Write(b []byte) (n int, err error) {
+func (s *streamConn) ReadPacket() ([]byte, error) {
+	mgr := s.readDeadline.Wait()
+	if mgr == nil {
+		return nil, readTimeoutErr
+	}
+	defer s.readDeadline.Unwait(mgr)
+	select {
+	case <-mgr.Chan:
+		return nil, readTimeoutErr
+	case packet, ok := <-s.stream.Incoming():
+		if !ok {
+			return nil, errors.New("read: stream closed")
+		}
+		return packet, nil
+	}
+}
+
+func (s *streamConn) WritePacket(b []byte) error {
 	mgr := s.writeDeadline.Wait()
 	if mgr == nil {
-		return 0, writeTimeoutErr
+		return writeTimeoutErr
 	}
 	defer s.writeDeadline.Unwait(mgr)
 	select {
 	case <-mgr.Chan:
-		return 0, writeTimeoutErr
+		return writeTimeoutErr
 	case s.stream.Outgoing() <- b:
-		return len(b), nil
+		return nil
 	case <-s.stream.Done():
-		return 0, errors.New("write: stream closed")
+		return errors.New("write: stream closed")
 	}
 }
 
 func (s *streamConn) Close() error {
 	return s.stream.Close()
-}
-
-func (s *streamConn) LocalAddr() net.Addr {
-	return s.localAddr
-}
-
-func (s *streamConn) RemoteAddr() net.Addr {
-	return s.remoteAddr
 }
 
 func (s *streamConn) SetDeadline(t time.Time) error {
@@ -72,23 +78,6 @@ func (s *streamConn) SetReadDeadline(t time.Time) error {
 func (s *streamConn) SetWriteDeadline(t time.Time) error {
 	s.writeDeadline.SetDeadline(t)
 	return nil
-}
-
-func (s *streamConn) readPacket() ([]byte, error) {
-	mgr := s.readDeadline.Wait()
-	if mgr == nil {
-		return nil, readTimeoutErr
-	}
-	defer s.readDeadline.Unwait(mgr)
-	select {
-	case <-mgr.Chan:
-		return nil, readTimeoutErr
-	case packet, ok := <-s.stream.Incoming():
-		if !ok {
-			return nil, errors.New("read: stream closed")
-		}
-		return packet, nil
-	}
 }
 
 // A deadlineManager manages channels that are notified

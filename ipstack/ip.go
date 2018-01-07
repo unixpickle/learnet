@@ -6,6 +6,8 @@ import (
 	"sync"
 )
 
+const DefaultTTL = 64
+
 // An IPv4Packet is a single packet intended to be sent or
 // received on an IPv4 connection.
 type IPv4Packet []byte

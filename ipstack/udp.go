@@ -1,8 +1,12 @@
 package ipstack
 
-import "net"
+import (
+	"net"
+)
 
 const ProtocolNumberUDP = 17
+
+const DefaultUDPReadBuffer = 16
 
 // A UDPPacket is a UDP payload contained in an IP packet.
 type UDPPacket interface {
@@ -95,6 +99,19 @@ func (u UDPHeader) setField(i int, val uint16) {
 
 // A UDP4Packet is a UDP packet with an IPv4 header.
 type UDP4Packet []byte
+
+// NewUDP4Packet creates an IPv4 UDP packet.
+func NewUDP4Packet(ttl int, source, dest *net.UDPAddr, payload []byte) UDP4Packet {
+	uPacket := make([]byte, 8+len(payload))
+	uHeader := UDPHeader(uPacket[:8])
+	uHeader.SetSourcePort(uint16(source.Port))
+	uHeader.SetDestPort(uint16(dest.Port))
+	uHeader.SetLength(uint16(len(uPacket)))
+	copy(uPacket[8:], payload)
+	res := UDP4Packet(NewIPv4Packet(ttl, ProtocolNumberUDP, source.IP, dest.IP, uPacket))
+	res.SetChecksum()
+	return res
+}
 
 // Valid checks various invariants.
 func (u UDP4Packet) Valid() bool {
