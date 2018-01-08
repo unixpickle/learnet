@@ -18,7 +18,7 @@ func InternetChecksum(data []byte) uint16 {
 	}
 
 	if len(data) == 1 {
-		sum += uint32(data[0])
+		sum += uint32(data[0]) << 8
 	}
 
 	for (sum >> 16) != 0 {
