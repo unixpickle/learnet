@@ -1,6 +1,6 @@
 // Demonstrate the basic setup for IP streams.
 //
-// Run this as route.
+// Run this as root.
 
 package main
 
