@@ -172,8 +172,8 @@ func (u UDP4Packet) UseChecksum() bool {
 func (u UDP4Packet) Checksum() uint16 {
 	udpLen := len(IPv4Packet(u).Payload())
 	pseudoPacket := make([]byte, 12+udpLen)
-	copy(pseudoPacket, IPv4Packet(u).SourceAddr())
-	copy(pseudoPacket[4:], IPv4Packet(u).SourceAddr())
+	copy(pseudoPacket, IPv4Packet(u).SourceAddr().To4())
+	copy(pseudoPacket[4:], IPv4Packet(u).DestAddr().To4())
 	pseudoPacket[9] = ProtocolNumberUDP
 	pseudoPacket[10] = byte(udpLen >> 8)
 	pseudoPacket[11] = byte(udpLen)
