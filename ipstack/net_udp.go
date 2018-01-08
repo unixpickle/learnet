@@ -16,6 +16,8 @@ type UDPConn interface {
 	WriteTo(b []byte, addr net.Addr) (n int, err error)
 }
 
+// A UDPNet performs function for a UDP host.
+// In particular, it can create UDPConns.
 type UDPNet interface {
 	DialUDP(laddr, raddr *net.UDPAddr) (UDPConn, error)
 	ListenUDP(laddr *net.UDPAddr) (UDPConn, error)
