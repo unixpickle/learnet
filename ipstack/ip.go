@@ -24,6 +24,8 @@ func NewIPv4Packet(ttl, proto int, source, dest net.IP, payload []byte) IPv4Pack
 	res.SetDestAddr(dest)
 	res.SetChecksum()
 
+	copy(res[20:], payload)
+
 	return res
 }
 
