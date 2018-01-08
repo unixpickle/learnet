@@ -72,6 +72,24 @@ func Send(s Stream, data []byte) error {
 	return nil
 }
 
+// Loopback writes all received packets on a Stream back
+// to the same stream.
+// It blocks until the Stream is closed.
+//
+// This is useful for tunnel interfaces, where a host
+// expects to be able to reach itself through a tunnel.
+// In that case, you should feed Loopback()) a Stream
+// which has been filtered for the host's IP address.
+func Loopback(stream Stream) {
+	for packet := range stream.Incoming() {
+		select {
+		case stream.Outgoing() <- packet:
+		case <-stream.Done():
+			return
+		}
+	}
+}
+
 // A MultiStream multiplexes an underlying stream.
 type MultiStream interface {
 	// Fork creates a Stream that reads/writes to the
