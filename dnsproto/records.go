@@ -3,7 +3,9 @@ package dnsproto
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"net"
 
 	"github.com/unixpickle/essentials"
@@ -38,7 +40,7 @@ func readSpecificRecord(g *GenericRecord, dataOffset int, packet []byte) (Record
 		if len(g.Data()) != 4 {
 			return nil, errors.New("unexpected data size for A record")
 		}
-		return ARecord{GenericRecord: g}, nil
+		return &ARecord{GenericRecord: g}, nil
 	}
 	// TODO: support SOA records.
 	return g, nil
@@ -90,6 +92,11 @@ func (g *GenericRecord) Encode(out *bytes.Buffer) (err error) {
 	return nil
 }
 
+// String generates a human-readable representation.
+func (g *GenericRecord) String() string {
+	return fmt.Sprintf("<record type %d: %s>", g.TypeValue, hex.EncodeToString(g.DataValue))
+}
+
 func (g *GenericRecord) encodeHeader(out *bytes.Buffer) error {
 	if err := encodeLabels(out, g.NameValue); err != nil {
 		return err
@@ -108,6 +115,11 @@ type ARecord struct {
 // IP gets the IPv4 address contained in the record.
 func (a *ARecord) IP() net.IP {
 	return net.IP(a.Data())
+}
+
+// String generates a human-readable representation.
+func (a *ARecord) String() string {
+	return "<A record: " + a.IP().String() + ">"
 }
 
 // A DomainRecord is a resource record containing a domain

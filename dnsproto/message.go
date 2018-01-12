@@ -8,6 +8,8 @@ import (
 	"github.com/unixpickle/essentials"
 )
 
+const ClassNumberIN = 1
+
 var OutOfBoundsErr = errors.New("index out of bounds")
 
 // A Question represents the question section of a DNS
@@ -161,5 +163,6 @@ func encodeLabels(out *bytes.Buffer, labels []string) error {
 		out.WriteByte(byte(len(labelBytes)))
 		out.Write(labelBytes)
 	}
+	out.WriteByte(0)
 	return nil
 }
