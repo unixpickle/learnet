@@ -172,15 +172,3 @@ func (m *messageReader) readDomain() (DomainName, error) {
 		result = append(result, string(labelData))
 	}
 }
-
-func getBit(b byte, idx uint) bool {
-	return (b & (1 << (7 - idx))) != 0
-}
-
-func setBit(b byte, idx uint, flag bool) byte {
-	if flag {
-		return b | (1 << (7 - idx))
-	} else {
-		return b & (0xff ^ (1 << (7 - idx)))
-	}
-}
