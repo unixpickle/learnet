@@ -101,7 +101,7 @@ func (m *messageReader) ReadFields(fields ...interface{}) error {
 			}
 		default:
 			if err := binary.Read(m.reader, binary.BigEndian, field); err != nil {
-				return err
+				return ErrBufferUnderflow
 			}
 		}
 	}
