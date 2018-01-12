@@ -87,6 +87,25 @@ func (d *DomainRecord) DomainData() DomainName {
 	return d.DomainDataValue
 }
 
+// An SOARecord is a Start of Authority resource record.
+type SOARecord struct {
+	*GenericRecord
+
+	MasterName      DomainName
+	ResponsibleName DomainName
+	Serial          uint32
+	Refresh         uint32
+	Retry           uint32
+	Expire          uint32
+	Minimum         uint32
+}
+
+// String returns a summary of the record.
+func (s *SOARecord) String() string {
+	return fmt.Sprintf("<SOA record: %s %s %d %d %d %d %d>",
+		s.MasterName, s.ResponsibleName, s.Serial, s.Refresh, s.Retry, s.Expire, s.Minimum)
+}
+
 func decodeRecord(m *messageReader) (Record, error) {
 	g := &GenericRecord{}
 	var length uint16
@@ -109,15 +128,22 @@ func decodeRecord(m *messageReader) (Record, error) {
 		oldOff := m.Offset()
 		m.Backtrack(len(g.DataValue))
 		res := &DomainRecord{GenericRecord: g}
-		if err := m.ReadFields(&res.DomainDataValue); err != nil {
-			return nil, err
+		err := m.ReadFields(&res.DomainDataValue)
+		if err != nil || m.Offset() != oldOff {
+			return nil, errors.New("invalid domain record")
 		}
-		if m.Offset() != oldOff {
-			return nil, errors.New("excess data in domain record")
+		return res, nil
+	case RecordTypeSOA:
+		oldOff := m.Offset()
+		m.Backtrack(len(g.DataValue))
+		res := &SOARecord{GenericRecord: g}
+		err := m.ReadFields(&res.MasterName, &res.ResponsibleName, &res.Serial, &res.Refresh,
+			&res.Retry, &res.Expire, &res.Minimum)
+		if err != nil || m.Offset() != oldOff {
+			return nil, errors.New("invalid SOA record")
 		}
 		return res, nil
 	}
-	// TODO: support SOA records here.
 
 	return g, nil
 }
@@ -128,9 +154,11 @@ func encodeRecord(m *messageWriter, record Record) error {
 	}
 	switch record := record.(type) {
 	case *DomainRecord:
-		return m.WriteLengthAndDomain(record.DomainData())
+		return m.WriteWithLength(record.DomainData())
+	case *SOARecord:
+		return m.WriteWithLength(record.MasterName, record.ResponsibleName, record.Serial,
+			record.Refresh, record.Retry, record.Expire, record.Minimum)
 	default:
 		return m.WriteFields(uint16(len(record.Data())), record.Data())
 	}
-	// TODO: support SOA records here.
 }

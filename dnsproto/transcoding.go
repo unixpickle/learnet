@@ -41,13 +41,13 @@ func (m *messageWriter) WriteFields(fields ...interface{}) error {
 	return nil
 }
 
-// WriteLengthAndDomain writes the 16-bit length of an
-// encoded domain followed by the domain itself.
-func (m *messageWriter) WriteLengthAndDomain(domain DomainName) error {
+// WriteWithLength writes a 16-bit length of the encoded
+// fields, followed by the fields themselves.
+func (m *messageWriter) WriteWithLength(fields ...interface{}) error {
 	m.buf.WriteByte(0)
 	m.buf.WriteByte(0)
 	start := m.buf.Len()
-	if err := m.WriteFields(domain); err != nil {
+	if err := m.WriteFields(fields...); err != nil {
 		return err
 	}
 	length := m.buf.Len() - start
