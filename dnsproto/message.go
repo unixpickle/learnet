@@ -1,6 +1,8 @@
 package dnsproto
 
 import (
+	"bytes"
+	"encoding/binary"
 	"errors"
 
 	"github.com/unixpickle/essentials"
@@ -16,6 +18,17 @@ type Question struct {
 	Class  int
 }
 
+// Encode writes the Question into a DNS message buffer.
+func (q *Question) Encode(out *bytes.Buffer) (err error) {
+	defer essentials.AddCtxTo("encode DNS question", &err)
+	if err := encodeLabels(out, q.Labels); err != nil {
+		return err
+	}
+	binary.Write(out, binary.BigEndian, uint16(q.Type))
+	binary.Write(out, binary.BigEndian, uint16(q.Class))
+	return nil
+}
+
 // A Message is a DNS message.
 type Message struct {
 	Header   Header
@@ -25,7 +38,7 @@ type Message struct {
 
 // DecodeMessage reads a Message from binary data.
 func DecodeMessage(data []byte) (msg *Message, err error) {
-	defer essentials.AddCtxTo("decode message", &err)
+	defer essentials.AddCtxTo("decode DNS message", &err)
 
 	if len(data) < 12 {
 		return nil, errors.New("message is too small")
@@ -51,6 +64,22 @@ func DecodeMessage(data []byte) (msg *Message, err error) {
 	msg.Records, err = readResourceRecords(data, endIdx+4)
 
 	return
+}
+
+// Encode encodes the message as binary data.
+func (m Message) Encode() (data []byte, err error) {
+	defer essentials.AddCtxTo("encode DNS message", &err)
+	var buf bytes.Buffer
+	buf.Write(m.Header)
+	if err := m.Question.Encode(&buf); err != nil {
+		return nil, err
+	}
+	for _, rr := range m.Records {
+		if err := rr.Encode(&buf); err != nil {
+			return nil, err
+		}
+	}
+	return buf.Bytes(), nil
 }
 
 func readResourceRecords(data []byte, curIdx int) (records []Record, err error) {
@@ -119,4 +148,18 @@ func readLabels(msg []byte, offset, limit int) ([]string, int, error) {
 		return nil, 0, err
 	}
 	return append([]string{label}, nextLabels...), endIdx, nil
+}
+
+func encodeLabels(out *bytes.Buffer, labels []string) error {
+	// TODO: perform compression here by searching earlier in
+	// the output buffer for the exact contents of the label.
+	for _, label := range labels {
+		if len(label) > 63 {
+			return errors.New("label is too long to encode")
+		}
+		labelBytes := []byte(label)
+		out.WriteByte(byte(len(labelBytes)))
+		out.Write(labelBytes)
+	}
+	return nil
 }

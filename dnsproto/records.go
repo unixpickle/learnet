@@ -1,8 +1,12 @@
 package dnsproto
 
 import (
+	"bytes"
+	"encoding/binary"
 	"errors"
 	"net"
+
+	"github.com/unixpickle/essentials"
 )
 
 // TODO: add AAAA record!
@@ -23,6 +27,7 @@ type Record interface {
 	Class() int
 	TTL() uint32
 	Data() []byte
+	Encode(out *bytes.Buffer) error
 }
 
 func readSpecificRecord(g *GenericRecord, dataOffset int, packet []byte) (Record, error) {
@@ -72,6 +77,27 @@ func (g *GenericRecord) TTL() uint32 {
 // Data returns the record's data.
 func (g *GenericRecord) Data() []byte {
 	return g.DataValue
+}
+
+// Encode writes the record into the buffer.
+func (g *GenericRecord) Encode(out *bytes.Buffer) (err error) {
+	defer essentials.AddCtxTo("encode resource record", &err)
+	if err := g.encodeHeader(out); err != nil {
+		return err
+	}
+	binary.Write(out, binary.BigEndian, uint16(len(g.DataValue)))
+	out.Write(g.DataValue)
+	return nil
+}
+
+func (g *GenericRecord) encodeHeader(out *bytes.Buffer) error {
+	if err := encodeLabels(out, g.NameValue); err != nil {
+		return err
+	}
+	for _, obj := range []interface{}{uint16(g.TypeValue), uint16(g.ClassValue), g.TTLValue} {
+		binary.Write(out, binary.BigEndian, obj)
+	}
+	return nil
 }
 
 // An ARecord is an IPv4 address record.
