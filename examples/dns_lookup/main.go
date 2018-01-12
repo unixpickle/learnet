@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/unixpickle/essentials"
@@ -21,19 +20,11 @@ func main() {
 		fmt.Fprintln(os.Stderr, "Usage: dns_lookup <hostname>")
 		os.Exit(1)
 	}
-	labels := strings.Split(os.Args[1], ".")
 
-	msg := &dnsproto.Message{
-		Header: make(dnsproto.Header, dnsproto.HeaderSize),
-		Question: &dnsproto.Question{
-			Labels: labels,
-			Type:   dnsproto.RecordTypeA,
-			Class:  dnsproto.ClassNumberIN,
-		},
-	}
-	msg.Header.SetIdentifier(1337)
-	msg.Header.SetQuestionCount(1)
-	msg.Header.SetRecursionDesired(true)
+	domain, err := dnsproto.ParseDomainName(os.Args[1])
+	essentials.Must(err)
+
+	msg := dnsproto.QueryMessage(domain, dnsproto.RecordTypeA, true)
 	packet, err := msg.Encode()
 	essentials.Must(err)
 
@@ -57,7 +48,7 @@ func main() {
 		decoded, err := dnsproto.DecodeMessage(response[:n])
 		essentials.Must(err)
 
-		fmt.Println("got response code:", decoded.Header.ResponseCode())
+		fmt.Println("got response code:", decoded.Header.ResponseCode)
 		for _, record := range decoded.Records {
 			fmt.Println("record:", record)
 		}

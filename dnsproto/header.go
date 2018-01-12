@@ -1,130 +1,71 @@
 package dnsproto
 
-// HeaderSize is the size of the DNS header.
-const HeaderSize = 12
+// A Header stores the header of a DNS message.
+type Header struct {
+	Identifier uint16
+	IsResponse bool
+	Opcode     Opcode
 
-// Header represents a 12 byte DNS header.
-type Header []byte
+	Authoritative      bool
+	Truncated          bool
+	RecursionDesired   bool
+	RecursionAvailable bool
 
-// Identifier gets the identifier field.
-func (h Header) Identifier() uint16 {
-	return getShort(h)
+	ResponseCode ResponseCode
+
+	QuestionCount   uint16
+	AnswerCount     uint16
+	AuthorityCount  uint16
+	AdditionalCount uint16
 }
 
-// SetIdentifier sets the identifier field.
-func (h Header) SetIdentifier(id uint16) {
-	setShort(h, id)
+func decodeHeader(m *messageReader) (*Header, error) {
+	var flags uint16
+	h := &Header{}
+	err := m.ReadFields(&h.Identifier, &flags, &h.QuestionCount, &h.AnswerCount,
+		&h.AuthorityCount, &h.AdditionalCount)
+	if err != nil {
+		return nil, err
+	}
+	if flags&(1<<15) != 0 {
+		h.IsResponse = true
+	}
+	h.Opcode = Opcode(flags>>11) & 0xf
+	if flags&(1<<10) != 0 {
+		h.Authoritative = true
+	}
+	if flags&(1<<9) != 0 {
+		h.Truncated = true
+	}
+	if flags&(1<<8) != 0 {
+		h.RecursionDesired = true
+	}
+	if flags&(1<<7) != 0 {
+		h.RecursionAvailable = true
+	}
+	h.ResponseCode = ResponseCode(flags) & 0xf
+	return h, nil
 }
 
-// ResponseFlag gets the response flag.
-func (h Header) ResponseFlag() bool {
-	return getBit(h[2], 0)
-}
-
-// SetResponseFlag sets the response flag.
-func (h Header) SetResponseFlag(flag bool) {
-	h[2] = setBit(h[2], 0, flag)
-}
-
-// Opcode gets the opcode field.
-func (h Header) Opcode() int {
-	return int((h[2] >> 3) & 0xf)
-}
-
-// SetOpcode sets the opcode field.
-func (h Header) SetOpcode(opcode int) {
-	h[2] &= 0x8f
-	h[2] |= byte((opcode & 0xf) << 3)
-}
-
-// Authoritative gets the authoritative flag.
-func (h Header) Authoritative() bool {
-	return getBit(h[2], 5)
-}
-
-// SetAuthoritative sets the authoritative flag.
-func (h Header) SetAuthoritative(flag bool) {
-	h[2] = setBit(h[2], 5, flag)
-}
-
-// Truncation gets the truncation flag.
-func (h Header) Truncation() bool {
-	return getBit(h[2], 6)
-}
-
-// SetTruncation sets the truncation flag.
-func (h Header) SetTruncation(flag bool) {
-	h[2] = setBit(h[2], 6, flag)
-}
-
-// RecursionDesired gets the recursion desired flag.
-func (h Header) RecursionDesired() bool {
-	return getBit(h[2], 7)
-}
-
-// SetRecursionDesired sets the recursion desired flag.
-func (h Header) SetRecursionDesired(flag bool) {
-	h[2] = setBit(h[2], 7, flag)
-}
-
-// RecursionAvailable gets the recursion available flag.
-func (h Header) RecursionAvailable() bool {
-	return getBit(h[3], 0)
-}
-
-// SetRecursionAvailable sets the recursion available
-// flag.
-func (h Header) SetRecursionAvailable(flag bool) {
-	h[3] = setBit(h[3], 0, flag)
-}
-
-// ResponseCode gets the response code field.
-func (h Header) ResponseCode() int {
-	return int(h[3] & 0xf)
-}
-
-// SetResponseCode sets the response code field.
-func (h Header) SetResponseCode(code int) {
-	h[3] &= 0xf0
-	h[3] |= byte(code)
-}
-
-// QuestionCount gets the question count field.
-func (h Header) QuestionCount() uint16 {
-	return getShort(h[4:])
-}
-
-// SetQuestionCount sets the question count field.
-func (h Header) SetQuestionCount(count uint16) {
-	setShort(h[4:], count)
-}
-
-// AnswerCount gets the answer count field.
-func (h Header) AnswerCount() uint16 {
-	return getShort(h[6:])
-}
-
-// SetAnswerCount gets the answer count field.
-func (h Header) SetAnswerCount(count uint16) {
-	setShort(h[6:], count)
-}
-
-// AuthorityCount gets the authority count field.
-func (h Header) AuthorityCount() uint16 {
-	return getShort(h[8:])
-}
-
-// SetAuthorityCount sets the authority count field.
-func (h Header) SetAuthorityCount(count uint16) {
-	setShort(h[8:], count)
-}
-
-// AdditionalCount gets the additional count field.
-func (h Header) AdditionalCount() uint16 {
-	return getShort(h[10:])
-}
-
-// SetAdditionalCount sets the additional count field.
-func (h Header) SetAdditionalCount(count uint16) {
-	setShort(h[10:], count)
+func (h *Header) encode(m *messageWriter) error {
+	var flags uint16
+	if h.IsResponse {
+		flags |= 1 << 15
+	}
+	flags |= uint16(h.Opcode&0xf) << 11
+	if h.Authoritative {
+		flags |= 1 << 10
+	}
+	if h.Truncated {
+		flags |= 1 << 9
+	}
+	if h.RecursionDesired {
+		flags |= 1 << 8
+	}
+	if h.RecursionAvailable {
+		flags |= 1 << 7
+	}
+	flags |= uint16(h.ResponseCode & 0xf)
+	return m.WriteFields(h.Identifier, flags, h.QuestionCount, h.AnswerCount,
+		h.AuthorityCount, h.AdditionalCount)
 }
