@@ -3,7 +3,6 @@
 package main
 
 import (
-	"encoding/hex"
 	"fmt"
 	"net"
 	"os"
@@ -34,8 +33,6 @@ func main() {
 	for {
 		_, err := conn.Write(packet)
 		essentials.Must(err)
-
-		fmt.Println(hex.EncodeToString(packet))
 
 		conn.SetReadDeadline(time.Now().Add(time.Second))
 		response := make([]byte, 4096)
