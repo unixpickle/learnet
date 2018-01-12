@@ -20,21 +20,27 @@ type Question struct {
 type Message struct {
 	Header   Header
 	Question *Question
-	Records  []interface{} // TODO: interface for RRs
+	Records  []Record
 }
 
 // DecodeMessage reads a Message from binary data.
 func DecodeMessage(data []byte) (msg *Message, err error) {
 	defer essentials.AddCtxTo("decode message", &err)
 
+	if len(data) < 12 {
+		return nil, errors.New("message is too small")
+	}
+
 	labels, endIdx, err := readLabels(data, 12, len(data))
 	if err != nil {
 		return nil, err
 	}
 	if endIdx+4 > len(data) {
-		return nil, err
+		return nil, OutOfBoundsErr
 	}
+
 	msg = &Message{
+		Header: Header(data[:12]),
 		Question: &Question{
 			Labels: labels,
 			Type:   int(getShort(data[endIdx:])),
@@ -42,9 +48,40 @@ func DecodeMessage(data []byte) (msg *Message, err error) {
 		},
 	}
 
-	// TODO: read records here.
+	msg.Records, err = readResourceRecords(data, endIdx+4)
 
-	return msg, nil
+	return
+}
+
+func readResourceRecords(data []byte, curIdx int) (records []Record, err error) {
+	var labels []string
+	for curIdx < len(data) {
+		labels, curIdx, err = readLabels(data, curIdx, len(data))
+		if err != nil {
+			return
+		} else if curIdx+10 > len(data) {
+			return records, OutOfBoundsErr
+		}
+		dataLen := int(getShort(data[curIdx+8:]))
+		if curIdx+10+dataLen > len(data) {
+			return records, OutOfBoundsErr
+		}
+		generic := &GenericRecord{
+			NameValue:  labels,
+			TypeValue:  int(getShort(data[curIdx:])),
+			ClassValue: int(getShort(data[curIdx+2:])),
+			TTLValue:   getInt(data[curIdx+4:]),
+			DataValue:  data[curIdx+10 : curIdx+10+dataLen],
+		}
+		var specific Record
+		specific, err = readSpecificRecord(generic, curIdx+10, data)
+		if err != nil {
+			return
+		}
+		records = append(records, specific)
+		curIdx += 10 + dataLen
+	}
+	return
 }
 
 // readLabels reads a list of labels at the given offset
