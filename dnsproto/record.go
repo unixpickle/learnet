@@ -149,7 +149,8 @@ func decodeRecord(m *messageReader) (Record, error) {
 }
 
 func encodeRecord(m *messageWriter, record Record) error {
-	if err := m.WriteFields(record.Name(), record.Type(), record.Class()); err != nil {
+	err := m.WriteFields(record.Name(), record.Type(), record.Class(), record.TTL())
+	if err != nil {
 		return err
 	}
 	switch record := record.(type) {
