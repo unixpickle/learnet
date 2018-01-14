@@ -67,9 +67,6 @@ func (m *messageWriter) writeDomain(d DomainName) error {
 		return err
 	}
 	for _, label := range d {
-		if len(label) > 63 {
-			return errors.New("label is too long to encode")
-		}
 		labelBytes := []byte(label)
 		m.buf.WriteByte(byte(len(labelBytes)))
 		m.buf.Write(labelBytes)
