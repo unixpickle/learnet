@@ -2,10 +2,13 @@ package dnsproto
 
 import (
 	"errors"
+	"regexp"
 	"strings"
 
 	"github.com/unixpickle/essentials"
 )
+
+var domainLabelRegexp = regexp.MustCompile("^[a-zA-Z]([a-zA-Z0-9-]*[a-zA-Z0-9])?$")
 
 // A DomainName is a sequence of labels comprising a DNS
 // domain name.
@@ -38,7 +41,15 @@ func (d DomainName) Validate() error {
 			return errors.New("invalid label size in domain name")
 		}
 	}
-	// TODO: check global length.
-	// TODO: check character encoding.
+	globalLength := 1
+	for _, label := range d {
+		globalLength += len(label) + 1
+		if !domainLabelRegexp.MatchString(label) {
+			return errors.New("invalid domain label: " + label)
+		}
+	}
+	if globalLength > 255 {
+		return errors.New("domain name is too long")
+	}
 	return nil
 }
