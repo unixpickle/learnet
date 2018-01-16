@@ -87,13 +87,14 @@ func RuleResponse(rules map[string]net.IP, msg *dnsproto.Message) *dnsproto.Mess
 	}
 	msg.Header.IsResponse = true
 	msg.Header.RecursionAvailable = true
+	msg.Answers = nil
+	msg.Authorities = nil
+	msg.Additional = nil
 	if msg.Questions[0].Type != dnsproto.RecordTypeA {
+		msg.AutoFill()
 		return msg
 	}
-	msg.Header.AnswerCount = 1
-	msg.Header.AdditionalCount = 0
-	msg.Header.AuthorityCount = 0
-	msg.Records = []dnsproto.Record{
+	msg.Answers = []dnsproto.Record{
 		&dnsproto.GenericRecord{
 			NameValue:  msg.Questions[0].Domain,
 			TypeValue:  dnsproto.RecordTypeA,
@@ -102,6 +103,7 @@ func RuleResponse(rules map[string]net.IP, msg *dnsproto.Message) *dnsproto.Mess
 			DataValue:  destIP.To4(),
 		},
 	}
+	msg.AutoFill()
 	return msg
 }
 

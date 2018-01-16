@@ -8,9 +8,11 @@ import (
 
 // A Message is a DNS message.
 type Message struct {
-	Header    *Header
-	Questions []*Question
-	Records   []Record
+	Header      *Header
+	Questions   []*Question
+	Answers     []Record
+	Authorities []Record
+	Additional  []Record
 }
 
 // QueryMessage creates a Message for a typical DNS query.
@@ -47,16 +49,19 @@ func DecodeMessage(data []byte) (msg *Message, err error) {
 		}
 	}
 
-	recordCount := int(msg.Header.AnswerCount + msg.Header.AuthorityCount +
-		msg.Header.AdditionalCount)
-	for i := 0; i < recordCount; i++ {
-		if record, err := decodeRecord(m); err != nil {
-			if err == ErrBufferUnderflow && msg.Header.Truncated {
-				return msg, nil
+	counts := []uint16{msg.Header.AnswerCount, msg.Header.AuthorityCount,
+		msg.Header.AdditionalCount}
+	fields := []*[]Record{&msg.Answers, &msg.Authorities, &msg.Additional}
+	for i, field := range fields {
+		for j := 0; j < int(counts[i]); j++ {
+			if record, err := decodeRecord(m); err != nil {
+				if err == ErrBufferUnderflow && msg.Header.Truncated {
+					return msg, nil
+				}
+				return nil, err
+			} else {
+				*field = append(*field, record)
 			}
-			return nil, err
-		} else {
-			msg.Records = append(msg.Records, record)
 		}
 	}
 
@@ -80,11 +85,27 @@ func (m *Message) Encode() (data []byte, err error) {
 			return nil, err
 		}
 	}
-	for _, record := range m.Records {
-		if err := encodeRecord(writer, record); err != nil {
-			return nil, err
+	for _, records := range [][]Record{m.Answers, m.Authorities, m.Additional} {
+		for _, record := range records {
+			if err := encodeRecord(writer, record); err != nil {
+				return nil, err
+			}
 		}
 	}
-
 	return writer.Bytes(), nil
+}
+
+// AutoFill fills in the header with information that can
+// be derived from the other fields of the packet.
+// For example, it sets the AnswerCount field.
+func (m *Message) AutoFill() {
+	m.Header.QuestionCount = uint16(len(m.Questions))
+	m.Header.AnswerCount = uint16(len(m.Answers))
+	m.Header.AuthorityCount = uint16(len(m.Authorities))
+	m.Header.AdditionalCount = uint16(len(m.Additional))
+}
+
+// Records gets all the records in order.
+func (m *Message) Records() []Record {
+	return append(append(append([]Record{}, m.Answers...), m.Authorities...), m.Additional...)
 }

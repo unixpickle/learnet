@@ -46,7 +46,7 @@ func main() {
 		essentials.Must(err)
 
 		fmt.Println("got response code:", decoded.Header.ResponseCode)
-		for _, record := range decoded.Records {
+		for _, record := range decoded.Records() {
 			fmt.Println("record:", record)
 		}
 		return
