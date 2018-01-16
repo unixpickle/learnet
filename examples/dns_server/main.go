@@ -91,13 +91,17 @@ func RuleResponse(rules map[string]net.IP, msg *dnsproto.Message) *dnsproto.Mess
 		return msg
 	}
 	msg.Header.AnswerCount = 1
-	msg.Records = append(msg.Records, &dnsproto.GenericRecord{
-		NameValue:  msg.Questions[0].Domain,
-		TypeValue:  dnsproto.RecordTypeA,
-		ClassValue: dnsproto.RecordClassIN,
-		TTLValue:   30,
-		DataValue:  destIP.To4(),
-	})
+	msg.Header.AdditionalCount = 0
+	msg.Header.AuthorityCount = 0
+	msg.Records = []dnsproto.Record{
+		&dnsproto.GenericRecord{
+			NameValue:  msg.Questions[0].Domain,
+			TypeValue:  dnsproto.RecordTypeA,
+			ClassValue: dnsproto.RecordClassIN,
+			TTLValue:   30,
+			DataValue:  destIP.To4(),
+		},
+	}
 	return msg
 }
 
