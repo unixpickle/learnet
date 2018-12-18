@@ -6,7 +6,6 @@ import (
 	"errors"
 	"net"
 	"os"
-	"sync"
 	"syscall"
 	"unsafe"
 
@@ -19,16 +18,11 @@ const tunDev = "/dev/net/tun"
 func MakeTunnel() (Tunnel, error) {
 	tun, err := openTunFile()
 	err = essentials.AddCtx("make tunnel", err)
-	return tun, err
+	return &posixTunnel{tun}, err
 }
 
 type tunFile struct {
-	fd   int
-	name string
-
-	refLock  sync.Mutex
-	refCount int
-	closed   bool
+	fdTunnelBase
 }
 
 func openTunFile() (*tunFile, error) {
@@ -62,8 +56,10 @@ func openTunFile() (*tunFile, error) {
 		}
 	}
 	res := &tunFile{
-		fd:   fd,
-		name: string(ifreq[:nameLen]),
+		fdTunnelBase{
+			fd:   fd,
+			name: string(ifreq[:nameLen]),
+		},
 	}
 
 	var flags [2]byte
@@ -72,7 +68,7 @@ func openTunFile() (*tunFile, error) {
 		return nil, err
 	}
 	var newFlags [2]byte
-	// Set IFF_UP.
+	// Set IFF_Ut.
 	systemByteOrder.PutUint16(newFlags[:], 1)
 	flags[0] |= newFlags[0]
 	flags[1] |= newFlags[1]
@@ -82,10 +78,6 @@ func openTunFile() (*tunFile, error) {
 	}
 
 	return res, nil
-}
-
-func (t *tunFile) Name() string {
-	return t.name
 }
 
 func (t *tunFile) ReadPacket() (packet []byte, err error) {
@@ -109,45 +101,6 @@ func (t *tunFile) WritePacket(buffer []byte) (err error) {
 		_, err = syscall.Write(t.fd, buffer)
 		return err
 	})
-
-}
-
-func (t *tunFile) MTU() (mtu int, err error) {
-	err = t.operate("get MTU", func() error {
-		buf := make([]byte, 4)
-		if err := t.ifreqIOCTL(syscall.SIOCGIFMTU, buf); err != nil {
-			return err
-		}
-		mtu = int(systemByteOrder.Uint32(buf))
-		return nil
-	})
-	return
-}
-
-func (t *tunFile) SetMTU(mtu int) (err error) {
-	return t.operate("set MTU", func() error {
-		var buf [4]byte
-		systemByteOrder.PutUint32(buf[:], uint32(mtu))
-		return t.ifreqIOCTL(syscall.SIOCSIFMTU, buf[:])
-	})
-}
-
-func (t *tunFile) Addresses() (local, dest net.IP, mask net.IPMask, err error) {
-	err = t.operate("get addresses", func() error {
-		var maskIP net.IP
-		outputs := []*net.IP{&local, &dest, &maskIP}
-		ioctls := []int{syscall.SIOCGIFADDR, syscall.SIOCGIFDSTADDR, syscall.SIOCGIFNETMASK}
-		for i, ioctl := range ioctls {
-			sockaddrOut := packSockaddr4(net.IPv4zero, 0)
-			if err := t.ifreqIOCTL(ioctl, sockaddrOut); err != nil {
-				return err
-			}
-			*outputs[i], _ = unpackSockaddr4(sockaddrOut)
-		}
-		mask = net.IPMask(maskIP)
-		return nil
-	})
-	return
 }
 
 func (t *tunFile) SetAddresses(local, dest net.IP, mask net.IPMask) (err error) {
@@ -168,16 +121,6 @@ func (t *tunFile) SetAddresses(local, dest net.IP, mask net.IPMask) (err error) 
 	})
 }
 
-func (t *tunFile) Close() (err error) {
-	return t.operate("close", func() error {
-		err := syscall.Shutdown(t.fd, syscall.SHUT_RDWR)
-		t.refLock.Lock()
-		t.closed = true
-		t.refLock.Unlock()
-		return err
-	})
-}
-
 func (t *tunFile) ifreqIOCTL(ioctl int, reqData []byte) error {
 	sock, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_DGRAM, 0)
 	if err != nil {
@@ -195,25 +138,4 @@ func (t *tunFile) ifreqIOCTL(ioctl int, reqData []byte) error {
 		return sysErr
 	}
 	return nil
-}
-
-func (t *tunFile) operate(ctx string, f func() error) error {
-	t.refLock.Lock()
-	if t.closed {
-		t.refLock.Unlock()
-		return essentials.AddCtx(ctx, os.ErrClosed)
-	}
-	t.refCount += 1
-	t.refLock.Unlock()
-
-	defer func() {
-		t.refLock.Lock()
-		defer t.refLock.Unlock()
-		t.refCount -= 1
-		if t.closed && t.refCount == 0 {
-			syscall.Close(t.fd)
-		}
-	}()
-
-	return essentials.AddCtx(ctx, f())
 }

@@ -4,11 +4,9 @@ package tunnet
 
 import (
 	"bytes"
-	"encoding/binary"
 	"errors"
 	"net"
-	"os"
-	"sync"
+	"syscall"
 	"unsafe"
 
 	"github.com/unixpickle/essentials"
@@ -25,16 +23,11 @@ const (
 func MakeTunnel() (Tunnel, error) {
 	tun, err := openUtunSocket()
 	err = essentials.AddCtx("make tunnel", err)
-	return tun, err
+	return &posixTunnel{tun}, err
 }
 
 type utunSocket struct {
-	fd   int
-	name string
-
-	refLock  sync.Mutex
-	refCount int
-	closed   bool
+	fdTunnelBase
 }
 
 func openUtunSocket() (res *utunSocket, err error) {
@@ -42,7 +35,7 @@ func openUtunSocket() (res *utunSocket, err error) {
 	if err != nil {
 		return nil, err
 	}
-	socket := &utunSocket{fd: fd}
+	socket := &utunSocket{fdTunnelBase{fd: fd}}
 
 	defer func() {
 		if err != nil {
@@ -72,100 +65,41 @@ func openUtunSocket() (res *utunSocket, err error) {
 	return socket, nil
 }
 
-func (u *utunSocket) Name() string {
-	return u.name
-}
-
 func (u *utunSocket) ReadPacket() (packet []byte, err error) {
-	defer essentials.AddCtxTo("read packet", &err)
-	if err := u.retain(); err != nil {
-		return nil, err
-	}
-	defer u.release()
-	packet = make([]byte, 65536)
-	for {
-		amount, err := unix.Read(u.fd, packet)
-		if err == nil {
-			return packet[4:amount], nil
-		} else if err == unix.EINTR {
-			continue
-		} else {
-			return nil, err
+	err = u.operate("read packet", func() error {
+		data := make([]byte, 65536)
+		for {
+			amount, err := unix.Read(u.fd, data)
+			if err == nil {
+				packet = data[4:amount]
+				return nil
+			} else if err != unix.EINTR {
+				return err
+			}
 		}
-	}
+	})
+	return
 }
 
 func (u *utunSocket) WritePacket(buffer []byte) (err error) {
-	defer essentials.AddCtxTo("write packet", &err)
-	if err := u.retain(); err != nil {
+	return u.operate("write packet", func() error {
+		_, err := syscall.Write(u.fd, append([]byte{0, 0, 0, 2}, buffer...))
 		return err
-	}
-	defer u.release()
-	_, err = unix.Write(u.fd, append([]byte{0, 0, 0, 2}, buffer...))
-	return err
-}
-
-func (u *utunSocket) MTU() (mtu int, err error) {
-	defer essentials.AddCtxTo("get MTU", &err)
-	buf := make([]byte, 4)
-	if err := u.ifreqIOCTL(ioctlSIOCGIFMTU, buf); err != nil {
-		return 0, err
-	}
-	var value uint32
-	binary.Read(bytes.NewReader(buf), systemByteOrder, &value)
-	return int(value), nil
-}
-
-func (u *utunSocket) SetMTU(mtu int) (err error) {
-	defer essentials.AddCtxTo("set MTU", &err)
-	var buf bytes.Buffer
-	binary.Write(&buf, systemByteOrder, uint32(mtu))
-	return u.ifreqIOCTL(ioctlSIOCSIFMTU, buf.Bytes())
-}
-
-func (u *utunSocket) Addresses() (local, dest net.IP, mask net.IPMask, err error) {
-	defer essentials.AddCtxTo("get addresses", &err)
-
-	sockaddrOut := packSockaddr4(net.IPv4zero, 0)
-
-	ips := []net.IP{}
-	ioctls := []int{ioctlSIOCGIFADDR, ioctlSIOCGIFDSTADDR, ioctlSIOCGIFNETMASK}
-	for _, ioctl := range ioctls {
-		if err := u.ifreqIOCTL(ioctl, sockaddrOut); err != nil {
-			return nil, nil, nil, err
-		}
-		ip, _ := unpackSockaddr4(sockaddrOut)
-		ips = append(ips, ip)
-	}
-	return ips[0], ips[1], net.IPMask(ips[2]), nil
+	})
 }
 
 func (u *utunSocket) SetAddresses(local, dest net.IP, mask net.IPMask) (err error) {
-	defer essentials.AddCtxTo("set addresses", &err)
-
-	if local.To4() == nil || dest.To4() == nil || len(mask) != 4 {
-		return errors.New("only IPv4 is supported")
-	}
-
-	u.ifreqIOCTL(ioctlSIOCDIFADDR, make([]byte, 16*3))
-
-	var sockaddrs bytes.Buffer
-	for _, ip := range []net.IP{local, dest, net.IP(mask)} {
-		sockaddrs.Write(packSockaddr4(ip, 0))
-	}
-	if err := u.ifreqIOCTL(ioctlSIOCAIFADDR, sockaddrs.Bytes()); err != nil {
-		return err
-	}
-	return nil
-}
-
-func (u *utunSocket) Close() (err error) {
-	defer essentials.AddCtxTo("close", &err)
-	if err := u.retain(); err != nil {
-		return err
-	}
-	defer u.release()
-	return unix.Shutdown(u.fd, unix.SHUT_RDWR)
+	return u.operate("set addresses", func() error {
+		if local.To4() == nil || dest.To4() == nil || len(mask) != 4 {
+			return errors.New("only IPv4 is supported")
+		}
+		u.ifreqIOCTL(ioctlSIOCDIFADDR, make([]byte, 16*3))
+		var sockaddrs bytes.Buffer
+		for _, ip := range []net.IP{local, dest, net.IP(mask)} {
+			sockaddrs.Write(packSockaddr4(ip, 0))
+		}
+		return u.ifreqIOCTL(ioctlSIOCAIFADDR, sockaddrs.Bytes())
+	})
 }
 
 func (u *utunSocket) getControlID() ([]byte, error) {
@@ -217,23 +151,4 @@ func (u *utunSocket) ifreqIOCTL(ioctl int, reqData []byte) error {
 		return nil
 	}
 	return sysErr
-}
-
-func (u *utunSocket) retain() error {
-	u.refLock.Lock()
-	defer u.refLock.Unlock()
-	if u.closed {
-		return os.ErrClosed
-	}
-	u.refCount += 1
-	return nil
-}
-
-func (u *utunSocket) release() {
-	u.refLock.Lock()
-	defer u.refLock.Unlock()
-	u.refCount -= 1
-	if u.closed && u.refCount == 0 {
-		unix.Close(u.fd)
-	}
 }
