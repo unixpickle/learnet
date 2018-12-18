@@ -11,9 +11,10 @@ import (
 const BufferSize = 10
 
 var (
-	MyIP    = net.ParseIP("10.13.37.2")
-	Gateway = net.ParseIP("10.13.37.1")
-	Netmask = net.IPMask{255, 255, 255, 252}
+	MyIP          = net.ParseIP("10.13.37.2")
+	Gateway       = net.ParseIP("10.13.37.1")
+	MaskedGateway = net.ParseIP("10.13.37.0")
+	Netmask       = net.IPMask{255, 255, 255, 252}
 )
 
 // SetupTunnel creates a tunnel interface for a demo.
@@ -25,7 +26,7 @@ func SetupTunnel() ipstack.MultiStream {
 	essentials.Must(err)
 
 	essentials.Must(tun.SetAddresses(MyIP, Gateway, Netmask))
-	essentials.Must(tunnet.AddRoute(Gateway, Gateway, Netmask))
+	essentials.Must(tunnet.AddRoute(MaskedGateway, Gateway, Netmask))
 
 	stream := tunnet.TunnelStream(tun, BufferSize, BufferSize)
 	stream = ipstack.FilterIPv4Valid(stream)
