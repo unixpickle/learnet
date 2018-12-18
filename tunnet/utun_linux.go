@@ -11,7 +11,6 @@ import (
 	"unsafe"
 
 	"github.com/unixpickle/essentials"
-	"golang.org/x/sys/unix"
 )
 
 const tunDev = "/dev/net/tun"
@@ -97,7 +96,7 @@ func (t *tunFile) ReadPacket() (packet []byte, err error) {
 			if err == nil {
 				packet = data[:amount]
 				return nil
-			} else if err != unix.EINTR {
+			} else if err != syscall.EINTR {
 				return err
 			}
 		}
@@ -180,7 +179,7 @@ func (t *tunFile) Close() (err error) {
 }
 
 func (t *tunFile) ifreqIOCTL(ioctl int, reqData []byte) error {
-	sock, err := syscall.Socket(unix.AF_INET, unix.SOCK_DGRAM, 0)
+	sock, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_DGRAM, 0)
 	if err != nil {
 		return err
 	}
@@ -189,7 +188,7 @@ func (t *tunFile) ifreqIOCTL(ioctl int, reqData []byte) error {
 	ifreq := make([]byte, 40)
 	copy(ifreq, []byte(t.name))
 	copy(ifreq[16:], reqData)
-	_, _, sysErr := unix.Syscall(unix.SYS_IOCTL, uintptr(sock), uintptr(ioctl),
+	_, _, sysErr := syscall.Syscall(syscall.SYS_IOCTL, uintptr(sock), uintptr(ioctl),
 		uintptr(unsafe.Pointer(&ifreq[0])))
 	copy(reqData, ifreq[16:])
 	if sysErr != 0 {
@@ -212,7 +211,7 @@ func (t *tunFile) operate(ctx string, f func() error) error {
 		defer t.refLock.Unlock()
 		t.refCount -= 1
 		if t.closed && t.refCount == 0 {
-			unix.Close(t.fd)
+			syscall.Close(t.fd)
 		}
 	}()
 
