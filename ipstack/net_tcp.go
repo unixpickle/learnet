@@ -15,17 +15,17 @@ type TCPNet interface {
 	Close() error
 }
 
-type tcpNet struct {
+type tcp4Net struct {
 	stream MultiStream
 }
 
-type tcpListener struct {
+type tcp4Listener struct {
 	stream MultiStream
 	addr   *net.TCPAddr
-	conns  chan *tcpConn
+	conns  chan *tcp4Conn
 }
 
-func (t *tcpListener) Accept() (net.Conn, error) {
+func (t *tcp4Listener) Accept() (net.Conn, error) {
 	conn := <-t.conns
 	if conn == nil {
 		return nil, io.ErrClosedPipe
@@ -33,30 +33,22 @@ func (t *tcpListener) Accept() (net.Conn, error) {
 	return conn, nil
 }
 
-func (t *tcpListener) Close() error {
+func (t *tcp4Listener) Close() error {
 	return t.stream.Close()
 }
 
-func (t *tcpListener) Addr() net.Addr {
+func (t *tcp4Listener) Addr() net.Addr {
 	return t.addr
 }
 
-func (t *tcpListener) loop() {
+func (t *tcp4Listener) loop() {
 	defer close(t.conns)
 	stream, err := t.stream.Fork(10)
 	if err != nil {
 		return
 	}
-	stream = Filter(stream, func(packet []byte) []byte {
-		tp := TCP4Packet(packet)
-		if !tp.DestAddr().IP.Equal(t.addr.IP) || tp.DestAddr().Port != t.addr.Port {
-			return nil
-		}
-		if !tp.Header().Flag(SYN) {
-			return nil
-		}
-		return packet
-	}, nil)
+	stream = filterTCP4Dest(stream, t.addr)
+	stream = filterTCP4Syn(stream)
 	for packet := range stream.Incoming() {
 		tp := TCP4Packet(packet)
 
@@ -64,21 +56,15 @@ func (t *tcpListener) loop() {
 		if err != nil {
 			return
 		}
-		raddr := tp.DestAddr()
-		stream = Filter(stream, func(packet []byte) []byte {
-			newRaddr := TCP4Packet(packet).DestAddr()
-			if newRaddr.IP.Equal(raddr.IP) && newRaddr.Port == raddr.Port {
-				return packet
-			}
-			return nil
-		}, nil)
+		stream = filterTCP4Source(stream, tp.SourceAddr())
+		stream = filterTCP4Dest(stream, tp.DestAddr())
 
 		// TODO: negotiate connection here.
 
-		conn := &tcpConn{
+		conn := &tcp4Conn{
 			stream: stream,
-			laddr:  t.addr,
-			raddr:  raddr,
+			laddr:  tp.DestAddr(),
+			raddr:  tp.SourceAddr(),
 			recv:   newSimpleTcpRecv(1337, 128),
 			send:   newSimpleTcpSend(1337, 128, 128),
 		}
@@ -86,7 +72,7 @@ func (t *tcpListener) loop() {
 	}
 }
 
-type tcpConn struct {
+type tcp4Conn struct {
 	stream Stream
 
 	laddr *net.TCPAddr
@@ -96,43 +82,43 @@ type tcpConn struct {
 	send tcpSend
 }
 
-func (t *tcpConn) Read(b []byte) (int, error) {
+func (t *tcp4Conn) Read(b []byte) (int, error) {
 	return t.recv.Read(b)
 }
 
-func (t *tcpConn) Write(b []byte) (int, error) {
+func (t *tcp4Conn) Write(b []byte) (int, error) {
 	return t.send.Write(b)
 }
 
-func (t *tcpConn) LocalAddr() net.Addr {
+func (t *tcp4Conn) LocalAddr() net.Addr {
 	return t.laddr
 }
 
-func (t *tcpConn) RemoteAddr() net.Addr {
+func (t *tcp4Conn) RemoteAddr() net.Addr {
 	return t.raddr
 }
 
-func (t *tcpConn) SetDeadline(d time.Time) error {
+func (t *tcp4Conn) SetDeadline(d time.Time) error {
 	t.SetReadDeadline(d)
 	t.SetWriteDeadline(d)
 	return nil
 }
 
-func (t *tcpConn) SetReadDeadline(d time.Time) error {
+func (t *tcp4Conn) SetReadDeadline(d time.Time) error {
 	t.recv.SetDeadline(d)
 	return nil
 }
 
-func (t *tcpConn) SetWriteDeadline(d time.Time) error {
+func (t *tcp4Conn) SetWriteDeadline(d time.Time) error {
 	t.send.SetDeadline(d)
 	return nil
 }
 
-func (t *tcpConn) Close() error {
+func (t *tcp4Conn) Close() error {
 	return t.send.Close()
 }
 
-func (t *tcpConn) loop() {
+func (t *tcp4Conn) loop() {
 	defer t.stream.Close()
 	for !t.send.Done() || !t.recv.Done() {
 		select {
@@ -152,10 +138,39 @@ func (t *tcpConn) loop() {
 	}
 }
 
-func (t *tcpConn) sendAck() {
+func (t *tcp4Conn) sendAck() {
 	// TODO: this.
 }
 
-func (t *tcpConn) sendSegment(seg *tcpSegment) {
+func (t *tcp4Conn) sendSegment(seg *tcpSegment) {
 	// TODO: this.
+}
+
+func filterTCP4Dest(s Stream, addr *net.TCPAddr) Stream {
+	return Filter(s, func(packet []byte) []byte {
+		tp := TCP4Packet(packet)
+		if !tp.DestAddr().IP.Equal(addr.IP) || tp.DestAddr().Port != addr.Port {
+			return nil
+		}
+		return packet
+	}, nil)
+}
+
+func filterTCP4Source(s Stream, addr *net.TCPAddr) Stream {
+	return Filter(s, func(packet []byte) []byte {
+		tp := TCP4Packet(packet)
+		if !tp.SourceAddr().IP.Equal(addr.IP) || tp.SourceAddr().Port != addr.Port {
+			return nil
+		}
+		return packet
+	}, nil)
+}
+
+func filterTCP4Syn(s Stream) Stream {
+	return Filter(s, func(packet []byte) []byte {
+		if TCP4Packet(packet).Header().Flag(SYN) {
+			return packet
+		}
+		return nil
+	}, nil)
 }
