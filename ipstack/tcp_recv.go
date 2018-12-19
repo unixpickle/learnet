@@ -10,12 +10,13 @@ import (
 // A tcpRecv manages the receiving end of TCP.
 type tcpRecv interface {
 	// Read can be called from any Goroutine, and must block
-	// until enough data can be read or EOF is reached.
+	// until some data can be read or EOF is reached.
 	Read(b []byte) (int, error)
 
 	// None of these methods should be called concurrently,
 	// except with concurrent Read()s.
 	Handle(p TCPPacket)
+	Fail(err error)
 	Ack() uint32
 	Window() uint32
 	Done() bool
@@ -25,6 +26,7 @@ type simpleTcpRecv struct {
 	bufferMax int
 
 	lock      sync.Mutex
+	failErr   error
 	assembler tcpAssembler
 	notify    chan struct{}
 	buffer    []byte
@@ -57,6 +59,9 @@ func (s *simpleTcpRecv) Read(b []byte) (int, error) {
 	if s.assembler.Finished() {
 		s.lock.Unlock()
 		return 0, io.EOF
+	} else if s.failErr != nil {
+		s.lock.Unlock()
+		return 0, s.failErr
 	}
 
 	// Wait for data to arrive.
@@ -80,6 +85,14 @@ func (s *simpleTcpRecv) Handle(p TCPPacket) {
 	s.lock.Unlock()
 }
 
+func (s *simpleTcpRecv) Fail(err error) {
+	s.lock.Lock()
+	s.failErr = err
+	close(s.notify)
+	s.notify = make(chan struct{})
+	s.lock.Unlock()
+}
+
 func (s *simpleTcpRecv) Ack() uint32 {
 	return s.assembler.Ack()
 }
@@ -92,7 +105,7 @@ func (s *simpleTcpRecv) Window() uint32 {
 }
 
 func (s *simpleTcpRecv) Done() bool {
-	return s.assembler.Finished()
+	return s.assembler.Finished() || s.failErr != nil
 }
 
 type tcpAssembler struct {
