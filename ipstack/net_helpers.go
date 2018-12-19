@@ -28,13 +28,14 @@ func newStreamConn(stream Stream) *streamConn {
 }
 
 func (s *streamConn) ReadPacket() ([]byte, error) {
-	mgr := s.readDeadline.Wait()
-	if mgr == nil {
-		return nil, readTimeoutErr
-	}
-	defer s.readDeadline.Unwait(mgr)
+	deadline := s.readDeadline.Chan()
 	select {
-	case <-mgr.Chan:
+	case <-deadline:
+		return nil, readTimeoutErr
+	default:
+	}
+	select {
+	case <-deadline:
 		return nil, readTimeoutErr
 	case packet, ok := <-s.stream.Incoming():
 		if !ok {
@@ -45,13 +46,14 @@ func (s *streamConn) ReadPacket() ([]byte, error) {
 }
 
 func (s *streamConn) WritePacket(b []byte) error {
-	mgr := s.writeDeadline.Wait()
-	if mgr == nil {
-		return writeTimeoutErr
-	}
-	defer s.writeDeadline.Unwait(mgr)
+	deadline := s.writeDeadline.Chan()
 	select {
-	case <-mgr.Chan:
+	case <-deadline:
+		return writeTimeoutErr
+	default:
+	}
+	select {
+	case <-deadline:
 		return writeTimeoutErr
 	case s.stream.Outgoing() <- b:
 		return nil
@@ -80,85 +82,45 @@ func (s *streamConn) SetWriteDeadline(t time.Time) error {
 	return nil
 }
 
-// A deadlineManager manages channels that are notified
-// when a dynamically-changing deadline is exceeded.
 type deadlineManager struct {
-	lock          sync.Mutex
-	exceeded      bool
-	waiters       map[*deadlineWaiter]bool
-	cancelCurrent chan<- struct{}
+	lock     sync.Mutex
+	curTimer *time.Timer
+	curChan  chan struct{}
 }
 
 func newDeadlineManager() *deadlineManager {
-	return &deadlineManager{waiters: map[*deadlineWaiter]bool{}}
+	return &deadlineManager{curChan: make(chan struct{})}
 }
 
-// Wait creates a channel that waits for the deadline to
-// be exceeded.
-//
-// Returns nil if the deadline was already exceeded.
-// Otherwise, the caller must call Unwait() when it is
-// done using the waiter.
-func (d *deadlineManager) Wait() *deadlineWaiter {
+func (d *deadlineManager) Chan() <-chan struct{} {
 	d.lock.Lock()
 	defer d.lock.Unlock()
-	if d.exceeded {
-		return nil
-	}
-	waiter := &deadlineWaiter{Chan: make(chan struct{})}
-	d.waiters[waiter] = true
-	return waiter
+	return d.curChan
 }
 
-// Unwait cleans up a waiting channel from Wait().
-func (d *deadlineManager) Unwait(w *deadlineWaiter) {
+func (d *deadlineManager) SetDeadline(deadline time.Time) {
 	d.lock.Lock()
 	defer d.lock.Unlock()
-	delete(d.waiters, w)
-}
-
-// SetDeadline updates the current deadline.
-func (d *deadlineManager) SetDeadline(t time.Time) {
-	d.lock.Lock()
-	defer d.lock.Unlock()
-	d.exceeded = false
-	if d.cancelCurrent != nil {
-		close(d.cancelCurrent)
-		d.cancelCurrent = nil
+	if d.curTimer != nil {
+		d.curTimer.Stop()
+		d.curTimer = nil
 	}
-	if t.IsZero() {
-		return
+	select {
+	case <-d.curChan:
+		d.curChan = make(chan struct{})
+	default:
 	}
-	cancel := make(chan struct{})
-	d.cancelCurrent = cancel
-	go func() {
-		select {
-		case <-time.After(time.Until(t)):
-		case <-cancel:
-			return
-		}
-
-		d.lock.Lock()
-		defer d.lock.Unlock()
-
-		// Race condition to avoid announcing a deadline
-		// after a new SetDeadline() has returned.
-		select {
-		case <-cancel:
-			return
-		default:
-		}
-
-		for waiter := range d.waiters {
-			close(waiter.Chan)
-		}
-		d.waiters = map[*deadlineWaiter]bool{}
-		d.exceeded = true
-	}()
-}
-
-type deadlineWaiter struct {
-	Chan chan struct{}
+	if !deadline.IsZero() {
+		d.curTimer = time.AfterFunc(deadline.Sub(time.Now()), func() {
+			d.lock.Lock()
+			defer d.lock.Unlock()
+			select {
+			case <-d.curChan:
+			default:
+				close(d.curChan)
+			}
+		})
+	}
 }
 
 type timeoutError struct {
