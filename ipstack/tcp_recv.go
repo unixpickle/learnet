@@ -41,19 +41,6 @@ func newSimpleTcpRecv(startSeq uint32, bufferMax int) *simpleTcpRecv {
 }
 
 func (s *simpleTcpRecv) Read(b []byte) (int, error) {
-	total := 0
-	for len(b) > 0 {
-		n, err := s.readSome(b)
-		total += n
-		if err != nil {
-			return total, err
-		}
-		b = b[n:]
-	}
-	return total, nil
-}
-
-func (s *simpleTcpRecv) readSome(b []byte) (int, error) {
 	s.lock.Lock()
 
 	// If there's some data buffered, let's read it.
@@ -76,7 +63,7 @@ func (s *simpleTcpRecv) readSome(b []byte) (int, error) {
 	notify := s.notify
 	s.lock.Unlock()
 	<-notify
-	return s.readSome(b)
+	return s.Read(b)
 }
 
 func (s *simpleTcpRecv) Handle(p TCPPacket) {
