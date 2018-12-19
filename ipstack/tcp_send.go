@@ -13,7 +13,7 @@ type tcpSend interface {
 
 	// None of these should be called concurrently, except
 	// with Write() and Close().
-	Handle(p TCPPacket)
+	Handle(ack uint32, window uint16)
 	Fail(err error)
 	Next() <-chan *tcpSegment
 	Done() bool
@@ -36,6 +36,7 @@ func newSimpleTcpSend(startSeq uint32, window, mss uint16) *simpleTcpSend {
 	return &simpleTcpSend{
 		maxSegmentSize: mss,
 		next:           make(chan *tcpSegment, 16),
+		notify:         make(chan struct{}),
 		window:         window,
 		writeBuf:       tcpWriteBuffer{sequence: startSeq},
 	}
@@ -79,11 +80,11 @@ func (s *simpleTcpSend) writeOrClose(data []byte, close bool) (int, error) {
 	return len(data), nil
 }
 
-func (s *simpleTcpSend) Handle(p TCPPacket) {
+func (s *simpleTcpSend) Handle(ack uint32, window uint16) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
-	s.writeBuf.HandleAck(p.Header().AckNum())
+	s.writeBuf.HandleAck(ack)
 	s.cancelTimer()
 	if s.writeBuf.BufferSize() == 0 {
 		close(s.notify)
@@ -91,7 +92,8 @@ func (s *simpleTcpSend) Handle(p TCPPacket) {
 	} else {
 		s.sendNext(false)
 	}
-	s.window = p.Header().WindowSize()
+
+	s.window = window
 	if s.window == 0 {
 		s.startTimer()
 	}
