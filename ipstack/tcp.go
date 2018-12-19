@@ -269,3 +269,9 @@ func (t TCP4Packet) SetChecksum() {
 	t.Header().SetChecksum(0)
 	t.Header().SetChecksum(t.Checksum())
 }
+
+type tcpSegment struct {
+	Start uint32
+	Data  []byte
+	Fin   bool
+}

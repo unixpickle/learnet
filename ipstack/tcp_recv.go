@@ -15,7 +15,7 @@ type tcpRecv interface {
 
 	// None of these methods should be called concurrently,
 	// except with concurrent Read()s.
-	Handle(p TCPPacket)
+	Handle(segment *tcpSegment)
 	Fail(err error)
 	Ack() uint32
 	Window() uint32
@@ -71,12 +71,7 @@ func (s *simpleTcpRecv) Read(b []byte) (int, error) {
 	return s.Read(b)
 }
 
-func (s *simpleTcpRecv) Handle(p TCPPacket) {
-	segment := &tcpSegment{
-		start: p.Header().SeqNum(),
-		data:  p.Payload(),
-		fin:   p.Header().Flag(FIN),
-	}
+func (s *simpleTcpRecv) Handle(segment *tcpSegment) {
 	s.lock.Lock()
 	newData := s.assembler.AddSegment(segment)
 	s.buffer = append(s.buffer, newData...)
@@ -115,7 +110,7 @@ type tcpAssembler struct {
 }
 
 func (t *tcpAssembler) AddSegment(s *tcpSegment) []byte {
-	if t.finished || t.relStart(s)+int32(len(s.data)) < 0 {
+	if t.finished || t.relStart(s)+int32(len(s.Data)) < 0 {
 		return nil
 	}
 
@@ -136,19 +131,19 @@ func (t *tcpAssembler) skimFront() []byte {
 		seg := t.segments[i]
 		start := t.relStart(seg)
 		if start == idx {
-			res = append(res, seg.data...)
-			idx += int32(len(seg.data))
+			res = append(res, seg.Data...)
+			idx += int32(len(seg.Data))
 		} else if start < idx {
-			if start+int32(len(seg.data)) > idx {
-				res = append(res, seg.data[idx-start:]...)
-				idx += int32(len(seg.data)) - (idx - start)
+			if start+int32(len(seg.Data)) > idx {
+				res = append(res, seg.Data[idx-start:]...)
+				idx += int32(len(seg.Data)) - (idx - start)
 			}
 		} else {
 			break
 		}
 		essentials.OrderedDelete(&t.segments, i)
 		i--
-		if seg.fin {
+		if seg.Fin {
 			t.finished = true
 			t.segments = nil
 			idx++
@@ -168,11 +163,5 @@ func (t *tcpAssembler) Finished() bool {
 }
 
 func (t *tcpAssembler) relStart(s *tcpSegment) int32 {
-	return int32(s.start - t.lastAcked)
-}
-
-type tcpSegment struct {
-	start uint32
-	data  []byte
-	fin   bool
+	return int32(s.Start - t.lastAcked)
 }

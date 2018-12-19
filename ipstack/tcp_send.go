@@ -6,12 +6,6 @@ import (
 	"time"
 )
 
-type tcpSendPayload struct {
-	SeqNum uint32
-	Data   []byte
-	Fin    bool
-}
-
 // A tcpSend manages the sending end of TCP.
 type tcpSend interface {
 	Write(b []byte) (int, error)
@@ -21,7 +15,7 @@ type tcpSend interface {
 	// with Write() and Close().
 	Handle(p TCPPacket)
 	Fail(err error)
-	Next() <-chan *tcpSendPayload
+	Next() <-chan *tcpSegment
 	Done() bool
 }
 
@@ -30,7 +24,7 @@ type simpleTcpSend struct {
 
 	writeLock   sync.Mutex
 	lock        sync.Mutex
-	next        chan *tcpSendPayload
+	next        chan *tcpSegment
 	notify      chan struct{}
 	timerCancel chan struct{}
 	failErr     error
@@ -41,7 +35,7 @@ type simpleTcpSend struct {
 func newSimpleTcpSend(startSeq uint32, window, mss uint16) *simpleTcpSend {
 	return &simpleTcpSend{
 		maxSegmentSize: mss,
-		next:           make(chan *tcpSendPayload, 16),
+		next:           make(chan *tcpSegment, 16),
 		window:         window,
 		writeBuf:       tcpWriteBuffer{sequence: startSeq},
 	}
@@ -111,7 +105,7 @@ func (s *simpleTcpSend) Fail(err error) {
 	s.lock.Unlock()
 }
 
-func (s *simpleTcpSend) Next() <-chan *tcpSendPayload {
+func (s *simpleTcpSend) Next() <-chan *tcpSegment {
 	return s.next
 }
 
@@ -187,27 +181,27 @@ func (t *tcpWriteBuffer) HandleAck(seq uint32) {
 	}
 }
 
-func (t *tcpWriteBuffer) Next(window uint16, force bool) *tcpSendPayload {
+func (t *tcpWriteBuffer) Next(window uint16, force bool) *tcpSegment {
 	if t.BufferSize() == 0 {
 		if force {
-			return &tcpSendPayload{SeqNum: t.sequence}
+			return &tcpSegment{Start: t.sequence}
 		} else {
 			return nil
 		}
 	}
 	if t.hasEOF && len(t.buffer) == 0 {
-		return &tcpSendPayload{
-			SeqNum: t.sequence,
-			Fin:    true,
+		return &tcpSegment{
+			Start: t.sequence,
+			Fin:   true,
 		}
 	}
 	buffer := t.buffer
 	if len(buffer) > int(window) {
 		buffer = buffer[:window]
 	}
-	return &tcpSendPayload{
-		SeqNum: t.sequence,
-		Data:   buffer,
+	return &tcpSegment{
+		Start: t.sequence,
+		Data:  buffer,
 	}
 }
 
