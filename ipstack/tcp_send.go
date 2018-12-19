@@ -10,9 +10,10 @@ import (
 type tcpSend interface {
 	Write(b []byte) (int, error)
 	Close() error
+	SetDeadline(t time.Time)
 
 	// None of these should be called concurrently, except
-	// with Write() and Close().
+	// with the above methods.
 	Handle(ack uint32, window uint16)
 	Fail(err error)
 	Next() <-chan *tcpSegment
@@ -30,6 +31,7 @@ type simpleTcpSend struct {
 	failErr     error
 	window      uint16
 	writeBuf    tcpWriteBuffer
+	deadline    *deadlineManager
 }
 
 func newSimpleTcpSend(startSeq uint32, window, mss uint16) *simpleTcpSend {
@@ -39,6 +41,7 @@ func newSimpleTcpSend(startSeq uint32, window, mss uint16) *simpleTcpSend {
 		notify:         make(chan struct{}),
 		window:         window,
 		writeBuf:       tcpWriteBuffer{sequence: startSeq},
+		deadline:       newDeadlineManager(),
 	}
 }
 
@@ -55,6 +58,14 @@ func (s *simpleTcpSend) writeOrClose(data []byte, close bool) (int, error) {
 	s.writeLock.Lock()
 	defer s.writeLock.Unlock()
 
+	if !close {
+		select {
+		case <-s.deadline.Chan():
+			return 0, writeTimeoutErr
+		default:
+		}
+	}
+
 	s.lock.Lock()
 	if s.writeBuf.sentEOF {
 		s.lock.Unlock()
@@ -70,7 +81,12 @@ func (s *simpleTcpSend) writeOrClose(data []byte, close bool) (int, error) {
 	notify := s.notify
 	s.sendNext(false)
 	s.lock.Unlock()
-	<-notify
+
+	select {
+	case <-notify:
+	case <-s.deadline.Chan():
+		return 0, writeTimeoutErr
+	}
 
 	s.lock.Lock()
 	defer s.lock.Unlock()
@@ -78,6 +94,10 @@ func (s *simpleTcpSend) writeOrClose(data []byte, close bool) (int, error) {
 		return len(data) - len(s.writeBuf.buffer), s.failErr
 	}
 	return len(data), nil
+}
+
+func (s *simpleTcpSend) SetDeadline(t time.Time) {
+	s.deadline.SetDeadline(t)
 }
 
 func (s *simpleTcpSend) Handle(ack uint32, window uint16) {

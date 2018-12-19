@@ -3,6 +3,7 @@ package ipstack
 import (
 	"io"
 	"sync"
+	"time"
 
 	"github.com/unixpickle/essentials"
 )
@@ -13,8 +14,11 @@ type tcpRecv interface {
 	// until some data can be read or EOF is reached.
 	Read(b []byte) (int, error)
 
+	// SetDeadline can be called from any Goroutine.
+	SetDeadline(t time.Time)
+
 	// None of these methods should be called concurrently,
-	// except with concurrent Read()s.
+	// except with the above methods.
 	Handle(segment *tcpSegment)
 	Fail(err error)
 	Ack() uint32
@@ -30,6 +34,7 @@ type simpleTcpRecv struct {
 	assembler tcpAssembler
 	notify    chan struct{}
 	buffer    []byte
+	deadline  *deadlineManager
 }
 
 func newSimpleTcpRecv(startSeq uint32, bufferMax int) *simpleTcpRecv {
@@ -38,11 +43,18 @@ func newSimpleTcpRecv(startSeq uint32, bufferMax int) *simpleTcpRecv {
 		assembler: tcpAssembler{
 			lastAcked: startSeq,
 		},
-		notify: make(chan struct{}),
+		notify:   make(chan struct{}),
+		deadline: newDeadlineManager(),
 	}
 }
 
 func (s *simpleTcpRecv) Read(b []byte) (int, error) {
+	select {
+	case <-s.deadline.Chan():
+		return 0, readTimeoutErr
+	default:
+	}
+
 	s.lock.Lock()
 
 	// If there's some data buffered, let's read it.
@@ -67,8 +79,16 @@ func (s *simpleTcpRecv) Read(b []byte) (int, error) {
 	// Wait for data to arrive.
 	notify := s.notify
 	s.lock.Unlock()
-	<-notify
+	select {
+	case <-notify:
+	case <-s.deadline.Chan():
+		return 0, readTimeoutErr
+	}
 	return s.Read(b)
+}
+
+func (s *simpleTcpRecv) SetDeadline(t time.Time) {
+	s.deadline.SetDeadline(t)
 }
 
 func (s *simpleTcpRecv) Handle(segment *tcpSegment) {
