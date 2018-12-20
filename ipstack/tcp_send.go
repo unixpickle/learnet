@@ -64,6 +64,9 @@ func newSimpleTcpSend(startSeq uint32, window, mss uint16) *simpleTcpSend {
 }
 
 func (s *simpleTcpSend) Write(b []byte) (int, error) {
+	if len(b) == 0 {
+		return 0, nil
+	}
 	return s.writeOrClose(b, false)
 }
 

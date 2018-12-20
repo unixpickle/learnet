@@ -1,4 +1,4 @@
-// Demonstrate the basic setup for IP streams.
+// Demonstrate the basic setup for UDP servers.
 //
 // Run this as root.
 

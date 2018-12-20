@@ -74,13 +74,15 @@ func (t *tcp4Net) ListenTCP(addr *net.TCPAddr) (net.Listener, error) {
 	if err := t.ports.Alloc(addr.Port); err != nil {
 		return nil, err
 	}
-	return &tcp4Listener{
+	res := &tcp4Listener{
 		stream: Multiplex(stream),
 		addr:   addr,
 		conns:  make(chan *tcp4Conn, 1),
 		ttl:    t.ttl,
 		ports:  t.ports,
-	}, nil
+	}
+	go res.loop()
+	return res, nil
 }
 
 func (t *tcp4Net) Close() error {
@@ -145,6 +147,7 @@ func (t *tcp4Listener) loop() {
 			send:   newSimpleTcpSend(handshake.localSeq, handshake.remoteWinSize, handshake.mss),
 			ttl:    t.ttl,
 		}
+		go conn.loop()
 		t.conns <- conn
 	}
 }
@@ -230,6 +233,10 @@ func (t *tcp4Conn) sendAck() {
 func (t *tcp4Conn) sendSegment(seg *tcpSegment) {
 	packet := NewTCP4Packet(t.ttl, t.laddr, t.raddr, seg.Start, t.recv.Ack(), t.recv.Window(),
 		seg.Data, ACK)
+	if seg.Fin {
+		packet.Header().SetFlag(FIN, true)
+		packet.SetChecksum()
+	}
 	select {
 	case t.stream.Outgoing() <- packet:
 	default:
