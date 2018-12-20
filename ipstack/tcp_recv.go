@@ -4,47 +4,65 @@ import (
 	"io"
 	"sync"
 	"time"
-
-	"github.com/unixpickle/essentials"
 )
 
 // A tcpRecv manages the receiving end of TCP.
+//
+// The Read and SetDeadline methods may be called from any
+// Goroutine. All other methods should only be called one
+// at a time.
 type tcpRecv interface {
-	// Read can be called from any Goroutine, and must block
-	// until some data can be read or EOF is reached.
+	// Read blocks until some data can be read, EOF is
+	// reached, or an error occurs due to Fail().
 	Read(b []byte) (int, error)
 
-	// SetDeadline can be called from any Goroutine.
+	// SetDeadline updates the deadline for all reads.
 	SetDeadline(t time.Time)
 
-	// None of these methods should be called concurrently,
-	// except with the above methods.
+	// Handle notifies the receiver of incoming data.
+	// This may cause reads to unblock.
 	Handle(segment *tcpSegment)
+
+	// Fail notifies the receiver of some kind of
+	// connection error.
+	// Errors are processed after all buffered data has
+	// been read.
+	// This may cause reads to unblock.
 	Fail(err error)
+
+	// Ack gets the first unacknowledged sequence number.
 	Ack() uint32
+
+	// Window gets the current window size.
 	Window() uint16
+
+	// WindowOpen is a channel which is sent a value when
+	// the window size goes from zero to non-zero.
+	WindowOpen() <-chan struct{}
+
+	// Done checks if the receiver no longer needs any
+	// more packets to finish up.
+	// This will only change due to Fail() or Handle().
 	Done() bool
 }
 
 type simpleTcpRecv struct {
-	bufferMax int
-
-	lock      sync.Mutex
-	failErr   error
-	assembler tcpAssembler
-	notify    chan struct{}
-	buffer    []byte
-	deadline  *deadlineManager
+	lock       sync.Mutex
+	failErr    error
+	assembler  *tcpAssembler
+	buffer     *tcpRecvBuffer
+	notify     chan struct{}
+	windowOpen chan struct{}
+	deadline   *deadlineManager
 }
 
-func newSimpleTcpRecv(startSeq uint32, bufferMax int) *simpleTcpRecv {
+func newSimpleTcpRecv(startSeq uint32, bufSize int) *simpleTcpRecv {
 	return &simpleTcpRecv{
-		bufferMax: bufferMax,
-		assembler: tcpAssembler{
-			lastAcked: startSeq,
-		},
-		notify:   make(chan struct{}),
-		deadline: newDeadlineManager(),
+		assembler:  newTCPAssembler(startSeq, bufSize),
+		buffer:     newTCPRecvBuffer(bufSize),
+		notify:     make(chan struct{}),
+		windowOpen: make(chan struct{}, 1),
+		deadline:   newDeadlineManager(),
 	}
 }
 
@@ -57,21 +75,27 @@ func (s *simpleTcpRecv) Read(b []byte) (int, error) {
 
 	s.lock.Lock()
 
-	// If there's some data buffered, let's read it.
-	if len(s.buffer) > 0 {
-		if len(s.buffer) < len(b) {
-			b = b[:len(s.buffer)]
+	oldWindow := s.buffer.Window()
+	numBytes, eof := s.buffer.Get(b)
+	if s.buffer.Window() != 0 && oldWindow == 0 {
+		select {
+		case s.windowOpen <- struct{}{}:
+		default:
 		}
-		copy(b, s.buffer)
-		s.buffer = append([]byte{}, s.buffer[len(b):]...)
-		s.lock.Unlock()
-		return len(b), nil
 	}
 
-	if s.assembler.Finished() {
+	if numBytes > 0 || eof {
 		s.lock.Unlock()
-		return 0, io.EOF
-	} else if s.failErr != nil {
+		if eof {
+			return numBytes, io.EOF
+		} else {
+			return numBytes, nil
+		}
+	}
+
+	// Only yield an error once the read buffer is
+	// completed.
+	if s.failErr != nil {
 		s.lock.Unlock()
 		return 0, s.failErr
 	}
@@ -93,8 +117,12 @@ func (s *simpleTcpRecv) SetDeadline(t time.Time) {
 
 func (s *simpleTcpRecv) Handle(segment *tcpSegment) {
 	s.lock.Lock()
-	newData := s.assembler.AddSegment(segment)
-	s.buffer = append(s.buffer, newData...)
+	s.assembler.AddSegment(segment)
+	newData, eof := s.assembler.Skim(s.buffer.Window())
+	s.buffer.Put(newData)
+	if eof {
+		s.buffer.PutEOF()
+	}
 	close(s.notify)
 	s.notify = make(chan struct{})
 	s.lock.Unlock()
@@ -109,79 +137,157 @@ func (s *simpleTcpRecv) Fail(err error) {
 }
 
 func (s *simpleTcpRecv) Ack() uint32 {
-	return s.assembler.Ack()
+	return s.assembler.Seq()
 }
 
 func (s *simpleTcpRecv) Window() uint16 {
-	if len(s.buffer) > s.bufferMax {
-		return 0
-	}
-	return uint16(s.bufferMax - len(s.buffer))
+	return uint16(s.buffer.Window())
+}
+
+func (s *simpleTcpRecv) WindowOpen() <-chan struct{} {
+	return s.windowOpen
 }
 
 func (s *simpleTcpRecv) Done() bool {
-	return s.assembler.Finished() || s.failErr != nil
+	return s.buffer.hitEOF || s.failErr != nil
 }
 
+// A tcpAssembler is used to assemble received segments of
+// data into contiguous chunks.
 type tcpAssembler struct {
-	segments  []*tcpSegment
-	lastAcked uint32
-	finished  bool
+	// The sequence number of the start of the buffer.
+	sequence uint32
+
+	// Data in the pipeline.
+	buffer []byte
+
+	// A boolean for each byte of buffer indicating if
+	// that byte has been received.
+	mask []bool
+
+	// If greater than -2, indicates the position in the
+	// buffer that represents EOF. This should come after
+	// the index of the final byte. May be len(buffer).
+	// May be -1 to indicate that EOF has been seen.
+	fin int
 }
 
-func (t *tcpAssembler) AddSegment(s *tcpSegment) []byte {
-	if t.finished || t.relStart(s)+int32(len(s.Data)) < 0 {
-		return nil
+func newTCPAssembler(seq uint32, bufSize int) *tcpAssembler {
+	return &tcpAssembler{
+		sequence: seq,
+		buffer:   make([]byte, bufSize),
+		mask:     make([]bool, bufSize),
+		fin:      -2,
 	}
-
-	t.segments = append(t.segments, s)
-	essentials.VoodooSort(t.segments, func(i, j int) bool {
-		return t.relStart(t.segments[i]) < t.relStart(t.segments[j])
-	})
-
-	// TODO: remove redundant segments.
-
-	return t.skimFront()
 }
 
-func (t *tcpAssembler) skimFront() []byte {
-	var res []byte
-	var idx int32
-	for i := 0; i < len(t.segments); i++ {
-		seg := t.segments[i]
-		start := t.relStart(seg)
-		if start == idx {
-			res = append(res, seg.Data...)
-			idx += int32(len(seg.Data))
-		} else if start < idx {
-			if start+int32(len(seg.Data)) > idx {
-				res = append(res, seg.Data[idx-start:]...)
-				idx += int32(len(seg.Data)) - (idx - start)
-			}
-		} else {
+// AddSegment tells the assembler about new incoming data.
+func (t *tcpAssembler) AddSegment(s *tcpSegment) {
+	if t.fin == 0 || t.fin == -1 {
+		return
+	}
+	for i, b := range s.Data {
+		offset := uint32(i) + s.Start - t.sequence
+		if offset >= uint32(len(t.buffer)) {
+			continue
+		}
+		t.buffer[offset] = b
+		t.mask[offset] = true
+	}
+	if s.Fin {
+		finOffset := s.Start + uint32(len(s.Data)) - t.sequence
+		if finOffset <= uint32(len(t.buffer)) {
+			t.fin = int(finOffset)
+		}
+	}
+}
+
+// Skim gets the available data from the front of the
+// buffer and potentially signals EOF.
+func (t *tcpAssembler) Skim(maxBytes int) (avail []byte, eof bool) {
+	if t.fin == -1 {
+		return nil, true
+	}
+	for i, f := range t.mask {
+		if i == t.fin {
+			eof = true
 			break
 		}
-		essentials.OrderedDelete(&t.segments, i)
-		i--
-		if seg.Fin {
-			t.finished = true
-			t.segments = nil
-			idx++
+		if i == maxBytes || !f {
 			break
 		}
+		avail = append(avail, t.buffer[i])
 	}
-	t.lastAcked += uint32(idx)
-	return res
+	readSize := len(avail)
+	if eof {
+		readSize += 1
+	}
+	t.sequence += uint32(readSize)
+	t.fin -= readSize
+	copy(t.buffer, t.buffer[readSize:])
+	copy(t.mask, t.mask[readSize:])
+	for i := len(t.mask) - readSize; i < len(t.mask); i++ {
+		t.mask[i] = false
+	}
+	return
 }
 
-func (t *tcpAssembler) Ack() uint32 {
-	return t.lastAcked
+// Seq gets the first unread sequence number.
+func (t *tcpAssembler) Seq() uint32 {
+	return t.sequence
 }
 
-func (t *tcpAssembler) Finished() bool {
-	return t.finished
+// A tcpRecvBuffer performs flow control for incoming TCP
+// data.
+type tcpRecvBuffer struct {
+	// The number of readable bytes in the buffer.
+	size int
+
+	// The buffer of available bytes.
+	buffer []byte
+
+	// A flag which is set to true if EOF should be
+	// produced once the buffer is drained.
+	hitEOF bool
 }
 
-func (t *tcpAssembler) relStart(s *tcpSegment) int32 {
-	return int32(s.Start - t.lastAcked)
+func newTCPRecvBuffer(bufSize int) *tcpRecvBuffer {
+	return &tcpRecvBuffer{
+		size:   0,
+		buffer: make([]byte, bufSize),
+	}
+}
+
+// Put adds data to the buffer.
+// The data must fit into the buffer.
+func (t *tcpRecvBuffer) Put(data []byte) {
+	if len(data) > t.Window() {
+		panic("buffer overflow")
+	}
+	copy(t.buffer[t.size:], data)
+	t.size += len(data)
+}
+
+// PutEOF adds an EOF to the end of the buffer.
+func (t *tcpRecvBuffer) PutEOF() {
+	t.hitEOF = true
+}
+
+// Get reads up to len(b) bytes from the buffer and
+// returns the number of bytes read, as well as an EOF
+// flag.
+func (t *tcpRecvBuffer) Get(b []byte) (int, bool) {
+	canRead := t.size
+	if canRead > len(b) {
+		canRead = len(b)
+	}
+	copy(b, t.buffer[:canRead])
+	copy(t.buffer, t.buffer[canRead:])
+	t.size -= canRead
+	return canRead, t.size == 0 && t.hitEOF
+}
+
+// Window gets the number of unused bytes in the buffer.
+func (t *tcpRecvBuffer) Window() int {
+	return len(t.buffer) - t.size
 }

@@ -3,49 +3,52 @@ package ipstack
 import (
 	"bytes"
 	"errors"
+	"io"
 	"testing"
 )
 
 func TestTCPAssembler(t *testing.T) {
-	a := &tcpAssembler{
-		lastAcked: 0xfffffffe,
-	}
-	res := a.AddSegment(&tcpSegment{
+	a := newTCPAssembler(0xfffffffe, 16)
+	a.AddSegment(&tcpSegment{
 		Start: 10,
 		Data:  []byte("hi!"),
 		Fin:   true,
 	})
-	if len(res) != 0 || a.finished {
+	res, eof := a.Skim(16)
+	if len(res) != 0 || eof {
 		t.Fatal("unexpected result")
 	}
-	res = a.AddSegment(&tcpSegment{
+	a.AddSegment(&tcpSegment{
 		Start: 1,
 		Data:  []byte("eyy"),
 		Fin:   false,
 	})
-	if len(res) != 0 || a.finished {
+	res, eof = a.Skim(16)
+	if len(res) != 0 || eof {
 		t.Fatal("unexpected result")
 	}
-	res = a.AddSegment(&tcpSegment{
+	a.AddSegment(&tcpSegment{
 		Start: 0xfffffffe,
 		Data:  []byte("hhhey"),
 		Fin:   false,
 	})
+	res, eof = a.Skim(16)
 	if !bytes.Equal(res, []byte("hhheyy")) {
 		t.Fatal("unexpected bytes")
 	}
-	if a.finished || a.lastAcked != 4 {
+	if eof || a.Seq() != 4 {
 		t.Fatal("unexpected state")
 	}
-	res = a.AddSegment(&tcpSegment{
+	a.AddSegment(&tcpSegment{
 		Start: 4,
 		Data:  []byte("hello!"),
 		Fin:   false,
 	})
+	res, eof = a.Skim(16)
 	if !bytes.Equal(res, []byte("hello!hi!")) {
 		t.Fatal("unexpected bytes")
 	}
-	if !a.finished || a.lastAcked != 14 {
+	if !eof || a.Seq() != 14 {
 		t.Fatal("unexpected state")
 	}
 }
@@ -71,7 +74,7 @@ func TestTCPRecvSuccess(t *testing.T) {
 	go func() {
 		data := make([]byte, 100)
 		n, err := recv.Read(data)
-		if err != nil {
+		if err != io.EOF {
 			t.Fatal(err)
 		}
 		if n != 3 || !bytes.Equal(data[:3], []byte("hi!")) {

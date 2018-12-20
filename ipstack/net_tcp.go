@@ -127,6 +127,8 @@ func (t *tcp4Conn) loop() {
 		select {
 		case outgoing := <-t.send.Next():
 			t.sendSegment(outgoing)
+		case <-t.recv.WindowOpen():
+			t.sendAck()
 		case packet := <-t.stream.Incoming():
 			tp := TCP4Packet(packet)
 			segment := &tcpSegment{
