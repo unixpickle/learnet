@@ -20,9 +20,9 @@ type tcpHandshake struct {
 
 // tcp4ServerHandshake performs the handshake from the
 // server side.
-func tcp4ServerHandshake(stream Stream, syn TCP4Packet) (*tcpHandshake, error) {
+func tcp4ServerHandshake(stream Stream, syn TCP4Packet, ttl int) (*tcpHandshake, error) {
 	localSeq := rand.Uint32()
-	synAck := NewTCP4Packet(DefaultTTL, syn.DestAddr(), syn.SourceAddr(), localSeq,
+	synAck := NewTCP4Packet(ttl, syn.DestAddr(), syn.SourceAddr(), localSeq,
 		syn.Header().SeqNum()+1, 1000, nil, SYN, ACK)
 OuterLoop:
 	for i := 0; i < tcpNumRetries; i++ {
@@ -45,7 +45,8 @@ OuterLoop:
 					return nil, errors.New("stream closed")
 				}
 				tp := TCP4Packet(packet)
-				if tp.Header().Flag(ACK) && !tp.Header().Flag(SYN) && tp.Header().AckNum() == localSeq+1 {
+				if tp.Header().Flag(ACK) && !tp.Header().Flag(SYN) &&
+					tp.Header().AckNum() == localSeq+1 {
 					return &tcpHandshake{
 						localSeq:      localSeq + 1,
 						remoteSeq:     syn.Header().SeqNum() + 1,

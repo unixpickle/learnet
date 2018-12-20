@@ -1,6 +1,7 @@
 package ipstack
 
 import (
+	"errors"
 	"io"
 	"net"
 	"time"
@@ -17,12 +18,81 @@ type TCPNet interface {
 
 type tcp4Net struct {
 	stream MultiStream
+	laddr  net.IP
+	ports  PortAllocator
+	ttl    int
+}
+
+// NewTCP4Net creates a TCPNet on top of a Stream.
+//
+// The stream is an IPv4 stream that should automatically
+// filter out invalid packets and perform fragmentation.
+//
+// The laddr is the local address for this network.
+// Only packets intended for laddr are processed by the
+// network.
+//
+// The ports argument is used to allocate ports.
+// If nil, BasicPortAllocator() is used.
+//
+// The ttl argument is used as the TTL field for all
+// outgoing packets.
+// If 0, DefaultTTL is used.
+func NewTCP4Net(stream Stream, laddr net.IP, ports PortAllocator, ttl int) TCPNet {
+	if ports == nil {
+		ports = BasicPortAllocator()
+	}
+	if ttl == 0 {
+		ttl = DefaultTTL
+	}
+	stream = FilterIPv4Proto(stream, ProtocolNumberTCP)
+	stream = FilterIPv4Dest(stream, laddr)
+	stream = Filter(stream, func(packet []byte) []byte {
+		tp := TCP4Packet(packet)
+		if tp.Valid() && tp.Checksum() == 0 {
+			return packet
+		}
+		return nil
+	}, nil)
+	return &tcp4Net{
+		stream: Multiplex(stream),
+		laddr:  laddr,
+		ports:  ports,
+		ttl:    ttl,
+	}
+}
+
+func (t *tcp4Net) DialTCP(addr *net.TCPAddr) (net.Conn, error) {
+	return nil, errors.New("not yet implemented")
+}
+
+func (t *tcp4Net) ListenTCP(addr *net.TCPAddr) (net.Listener, error) {
+	stream, err := t.stream.Fork(16)
+	if err != nil {
+		return nil, io.ErrClosedPipe
+	}
+	if err := t.ports.Alloc(addr.Port); err != nil {
+		return nil, err
+	}
+	return &tcp4Listener{
+		stream: Multiplex(stream),
+		addr:   addr,
+		conns:  make(chan *tcp4Conn, 1),
+		ttl:    t.ttl,
+		ports:  t.ports,
+	}, nil
+}
+
+func (t *tcp4Net) Close() error {
+	return t.stream.Close()
 }
 
 type tcp4Listener struct {
 	stream MultiStream
 	addr   *net.TCPAddr
 	conns  chan *tcp4Conn
+	ttl    int
+	ports  PortAllocator
 }
 
 func (t *tcp4Listener) Accept() (net.Conn, error) {
@@ -34,7 +104,10 @@ func (t *tcp4Listener) Accept() (net.Conn, error) {
 }
 
 func (t *tcp4Listener) Close() error {
-	return t.stream.Close()
+	if err := t.stream.Close(); err != nil {
+		return err
+	}
+	return t.ports.Free(t.addr.Port)
 }
 
 func (t *tcp4Listener) Addr() net.Addr {
@@ -59,7 +132,7 @@ func (t *tcp4Listener) loop() {
 		stream = filterTCP4Source(stream, tp.SourceAddr())
 		stream = filterTCP4Dest(stream, tp.DestAddr())
 
-		handshake, err := tcp4ServerHandshake(stream, tp)
+		handshake, err := tcp4ServerHandshake(stream, tp, t.ttl)
 		if err != nil {
 			stream.Close()
 			return
@@ -70,6 +143,7 @@ func (t *tcp4Listener) loop() {
 			raddr:  tp.SourceAddr(),
 			recv:   newSimpleTcpRecv(handshake.remoteSeq, 128),
 			send:   newSimpleTcpSend(handshake.localSeq, handshake.remoteWinSize, handshake.mss),
+			ttl:    t.ttl,
 		}
 		t.conns <- conn
 	}
@@ -83,6 +157,8 @@ type tcp4Conn struct {
 
 	recv tcpRecv
 	send tcpSend
+
+	ttl int
 }
 
 func (t *tcp4Conn) Read(b []byte) (int, error) {
@@ -144,8 +220,7 @@ func (t *tcp4Conn) loop() {
 }
 
 func (t *tcp4Conn) sendAck() {
-	// TODO: figure out a sequence number to use here.
-	packet := NewTCP4Packet(DefaultTTL, t.laddr, t.raddr, 0, t.recv.Ack(), t.recv.Window(), nil, ACK)
+	packet := NewTCP4Packet(t.ttl, t.laddr, t.raddr, 0, t.recv.Ack(), t.recv.Window(), nil, ACK)
 	select {
 	case t.stream.Outgoing() <- packet:
 	default:
@@ -153,7 +228,7 @@ func (t *tcp4Conn) sendAck() {
 }
 
 func (t *tcp4Conn) sendSegment(seg *tcpSegment) {
-	packet := NewTCP4Packet(DefaultTTL, t.laddr, t.raddr, seg.Start, t.recv.Ack(), t.recv.Window(),
+	packet := NewTCP4Packet(t.ttl, t.laddr, t.raddr, seg.Start, t.recv.Ack(), t.recv.Window(),
 		seg.Data, ACK)
 	select {
 	case t.stream.Outgoing() <- packet:
