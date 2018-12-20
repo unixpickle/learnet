@@ -194,6 +194,25 @@ func (t *TCPOption) Encode() []byte {
 // packet.
 type TCP4Packet []byte
 
+// NewTCP4Packet constructs a generic TCP4Packet.
+func NewTCP4Packet(ttl int, source, dest *net.UDPAddr, seqNum, ackNum uint32, windowSize uint16,
+	payload []byte, flags ...Flag) TCP4Packet {
+	tcpPacket := append(make([]byte, 20), payload...)
+	header := TCPHeader(tcpPacket[:20])
+	header.SetSourcePort(uint16(source.Port))
+	header.SetDestPort(uint16(dest.Port))
+	header.SetSeqNum(seqNum)
+	header.SetAckNum(ackNum)
+	header.SetWindowSize(windowSize)
+	header.SetDataOffset(5)
+	for _, flag := range flags {
+		header.SetFlag(flag, true)
+	}
+	res := TCP4Packet(NewIPv4Packet(ttl, ProtocolNumberTCP, source.IP, dest.IP, tcpPacket))
+	res.SetChecksum()
+	return res
+}
+
 // Valid checks that the packet can be used.
 func (t TCP4Packet) Valid() bool {
 	ipPacket := IPv4Packet(t)
