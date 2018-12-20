@@ -137,7 +137,7 @@ func (t *tcp4Listener) loop() {
 		handshake, err := tcp4ServerHandshake(stream, tp, t.ttl)
 		if err != nil {
 			stream.Close()
-			return
+			continue
 		}
 		conn := &tcp4Conn{
 			stream: stream,
@@ -201,7 +201,6 @@ func (t *tcp4Conn) Close() error {
 }
 
 func (t *tcp4Conn) loop() {
-	defer t.stream.Close()
 	for !t.send.Done() || !t.recv.Done() {
 		select {
 		case outgoing := <-t.send.Next():
@@ -209,6 +208,9 @@ func (t *tcp4Conn) loop() {
 		case <-t.recv.WindowOpen():
 			t.sendAck()
 		case packet := <-t.stream.Incoming():
+			if packet == nil {
+				return
+			}
 			tp := TCP4Packet(packet)
 			segment := &tcpSegment{
 				Start: tp.Header().SeqNum(),
@@ -217,13 +219,17 @@ func (t *tcp4Conn) loop() {
 			}
 			t.recv.Handle(segment)
 			t.send.Handle(tp.Header().AckNum(), tp.Header().WindowSize())
-			t.sendAck()
+			if len(segment.Data) > 0 {
+				t.sendAck()
+			}
 		}
 	}
+	t.stream.Close()
 }
 
 func (t *tcp4Conn) sendAck() {
-	packet := NewTCP4Packet(t.ttl, t.laddr, t.raddr, 0, t.recv.Ack(), t.recv.Window(), nil, ACK)
+	packet := NewTCP4Packet(t.ttl, t.laddr, t.raddr, t.send.Seq(), t.recv.Ack(), t.recv.Window(),
+		nil, ACK)
 	select {
 	case t.stream.Outgoing() <- packet:
 	default:

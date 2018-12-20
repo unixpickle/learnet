@@ -34,6 +34,9 @@ type tcpSend interface {
 	// Not reading this will cause segments to be dropped.
 	Next() <-chan *tcpSegment
 
+	// Seq gets the first sequence number not sent.
+	Seq() uint32
+
 	// Done checks if the sender has no more segments to
 	// send.
 	Done() bool
@@ -149,7 +152,15 @@ func (s *simpleTcpSend) Next() <-chan *tcpSegment {
 	return s.timer.Chan()
 }
 
+func (s *simpleTcpSend) Seq() uint32 {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	return s.writeBuf.sequence
+}
+
 func (s *simpleTcpSend) Done() bool {
+	s.lock.Lock()
+	defer s.lock.Unlock()
 	return s.writeBuf.sentEOF || s.failErr != nil
 }
 

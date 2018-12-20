@@ -8,7 +8,7 @@ import (
 )
 
 func TestTCPAssembler(t *testing.T) {
-	a := newTCPAssembler(0xfffffffe, 16)
+	a := newTCPAssembler(0xfffffffe)
 	a.AddSegment(&tcpSegment{
 		Start: 10,
 		Data:  []byte("hi!"),

@@ -58,7 +58,7 @@ type simpleTcpRecv struct {
 
 func newSimpleTcpRecv(startSeq uint32, bufSize int) *simpleTcpRecv {
 	return &simpleTcpRecv{
-		assembler:  newTCPAssembler(startSeq, bufSize),
+		assembler:  newTCPAssembler(startSeq),
 		buffer:     newTCPRecvBuffer(bufSize),
 		notify:     make(chan struct{}),
 		windowOpen: make(chan struct{}, 1),
@@ -137,10 +137,14 @@ func (s *simpleTcpRecv) Fail(err error) {
 }
 
 func (s *simpleTcpRecv) Ack() uint32 {
+	s.lock.Lock()
+	defer s.lock.Unlock()
 	return s.assembler.Seq()
 }
 
 func (s *simpleTcpRecv) Window() uint16 {
+	s.lock.Lock()
+	defer s.lock.Unlock()
 	return uint16(s.buffer.Window())
 }
 
@@ -149,6 +153,8 @@ func (s *simpleTcpRecv) WindowOpen() <-chan struct{} {
 }
 
 func (s *simpleTcpRecv) Done() bool {
+	s.lock.Lock()
+	defer s.lock.Unlock()
 	return s.buffer.hitEOF || s.failErr != nil
 }
 
@@ -172,11 +178,11 @@ type tcpAssembler struct {
 	fin int
 }
 
-func newTCPAssembler(seq uint32, bufSize int) *tcpAssembler {
+func newTCPAssembler(seq uint32) *tcpAssembler {
 	return &tcpAssembler{
 		sequence: seq,
-		buffer:   make([]byte, bufSize),
-		mask:     make([]bool, bufSize),
+		buffer:   make([]byte, 65536),
+		mask:     make([]bool, 65536),
 		fin:      -2,
 	}
 }
