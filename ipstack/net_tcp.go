@@ -59,14 +59,17 @@ func (t *tcp4Listener) loop() {
 		stream = filterTCP4Source(stream, tp.SourceAddr())
 		stream = filterTCP4Dest(stream, tp.DestAddr())
 
-		// TODO: negotiate connection here.
-
+		handshake, err := tcp4ServerHandshake(stream, tp)
+		if err != nil {
+			stream.Close()
+			return
+		}
 		conn := &tcp4Conn{
 			stream: stream,
 			laddr:  tp.DestAddr(),
 			raddr:  tp.SourceAddr(),
-			recv:   newSimpleTcpRecv(1337, 128),
-			send:   newSimpleTcpSend(1337, 128, 128),
+			recv:   newSimpleTcpRecv(handshake.remoteSeq, 128),
+			send:   newSimpleTcpSend(handshake.localSeq, handshake.remoteWinSize, handshake.mss),
 		}
 		t.conns <- conn
 	}
