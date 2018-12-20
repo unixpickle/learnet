@@ -22,7 +22,7 @@ type tcpRecv interface {
 	Handle(segment *tcpSegment)
 	Fail(err error)
 	Ack() uint32
-	Window() uint32
+	Window() uint16
 	Done() bool
 }
 
@@ -112,11 +112,11 @@ func (s *simpleTcpRecv) Ack() uint32 {
 	return s.assembler.Ack()
 }
 
-func (s *simpleTcpRecv) Window() uint32 {
+func (s *simpleTcpRecv) Window() uint16 {
 	if len(s.buffer) > s.bufferMax {
 		return 0
 	}
-	return uint32(s.bufferMax - len(s.buffer))
+	return uint16(s.bufferMax - len(s.buffer))
 }
 
 func (s *simpleTcpRecv) Done() bool {

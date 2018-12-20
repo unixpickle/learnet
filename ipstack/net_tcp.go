@@ -139,11 +139,21 @@ func (t *tcp4Conn) loop() {
 }
 
 func (t *tcp4Conn) sendAck() {
-	// TODO: this.
+	// TODO: figure out a sequence number to use here.
+	packet := NewTCP4Packet(DefaultTTL, t.laddr, t.raddr, 0, t.recv.Ack(), t.recv.Window(), nil, ACK)
+	select {
+	case t.stream.Outgoing() <- packet:
+	default:
+	}
 }
 
 func (t *tcp4Conn) sendSegment(seg *tcpSegment) {
-	// TODO: this.
+	packet := NewTCP4Packet(DefaultTTL, t.laddr, t.raddr, seg.Start, t.recv.Ack(), t.recv.Window(),
+		seg.Data, ACK)
+	select {
+	case t.stream.Outgoing() <- packet:
+	default:
+	}
 }
 
 func filterTCP4Dest(s Stream, addr *net.TCPAddr) Stream {
