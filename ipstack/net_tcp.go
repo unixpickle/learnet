@@ -143,7 +143,7 @@ func (t *tcp4Listener) loop() {
 			stream: stream,
 			laddr:  tp.DestAddr(),
 			raddr:  tp.SourceAddr(),
-			recv:   newSimpleTcpRecv(handshake.remoteSeq, 128),
+			recv:   newSimpleTcpRecv(handshake.remoteSeq, 4096),
 			send:   newSimpleTcpSend(handshake.localSeq, handshake.remoteWinSize, handshake.mss),
 			ttl:    t.ttl,
 		}

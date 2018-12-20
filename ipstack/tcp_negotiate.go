@@ -53,7 +53,7 @@ OuterLoop:
 						localWinSize:  1000,
 						remoteWinSize: tp.Header().WindowSize(),
 						// TODO: read MSS from options.
-						mss: 128,
+						mss: 512,
 					}, nil
 				}
 			}
